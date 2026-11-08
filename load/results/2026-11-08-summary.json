@@ -1,0 +1,417 @@
+{
+  "recorded_at": "2026-11-08T20:38:57.289997+08:00",
+  "source_commit": "3061b3c687b923cd6d90315d958437467caf94a6",
+  "jar_sha256": "db7945d55bd5d6f95525037d833bc8a7549ae03100f459f2e9fb49f617f66232",
+  "environment": {
+    "host_logical_cpus": 16,
+    "host_ram_bytes": 34159550464,
+    "docker_memory_bytes": 16668344320,
+    "docker_version": "29.8.2",
+    "java": "25.0.5",
+    "k6": "2.3.0",
+    "jvm_options": [
+      "-Xms256m",
+      "-Xmx1g",
+      "-XX:MaxMetaspaceSize=256m"
+    ],
+    "database_pool": 16,
+    "consumers_min": 2,
+    "consumers_max": 4,
+    "queue_timeout_seconds": 30,
+    "hold_seconds": 1800,
+    "default_admission_global": 500,
+    "default_admission_client": 200,
+    "raised_admission_global": 20000,
+    "raised_admission_client": 20000,
+    "debug": false,
+    "webhook_enabled": false,
+    "test_project": "flashsale-load",
+    "base_url": "http://127.0.0.1:18081"
+  },
+  "results": [
+    {
+      "label": "raised-75",
+      "scenario": {
+        "profile": "raised",
+        "target_rps": 75,
+        "duration_seconds": 60,
+        "preallocated_vus": 200,
+        "max_vus": 500
+      },
+      "activity_id": "7c3c950e-7552-40ed-96e0-062e75ce4082",
+      "http_requests": 4500,
+      "actual_http_rps": 74.99573036807726,
+      "accepted": 4500,
+      "throttled": 0,
+      "unexpected_rate": 0,
+      "accepted_p95_ms": 60.35455,
+      "dropped_iterations": 0,
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 4500,
+          "quantity": 4500,
+          "avg_processing_ms": 183,
+          "max_processing_ms": 555
+        }
+      ],
+      "reserved_processing_ms": {
+        "p50": 166,
+        "p95": 364,
+        "max": 555
+      },
+      "recovery_after_last_admission_ms": 136,
+      "inventory": {
+        "total": 1000000,
+        "available": 995500,
+        "held": 4500,
+        "quota": 4500,
+        "max_per_user": 1,
+        "valid": true
+      },
+      "sampled_min_free_mb": 6459,
+      "raw_k6_summary": ".runtime/load-2026-11-08/raised-75.summary.json"
+    },
+    {
+      "label": "normal-100",
+      "scenario": {
+        "profile": "default",
+        "target_rps": 100,
+        "duration_seconds": 30,
+        "preallocated_vus": 200,
+        "max_vus": 500
+      },
+      "activity_id": "2cd58fa3-0780-448f-b378-7e14f67f8b10",
+      "http_requests": 3000,
+      "actual_http_rps": 99.91804588652326,
+      "accepted": 3000,
+      "throttled": 0,
+      "unexpected_rate": 0,
+      "accepted_p95_ms": 66.36623499999995,
+      "dropped_iterations": 0,
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 3000,
+          "quantity": 3000,
+          "avg_processing_ms": 3291,
+          "max_processing_ms": 5216
+        }
+      ],
+      "reserved_processing_ms": {
+        "p50": 3868,
+        "p95": 4914,
+        "max": 5216
+      },
+      "recovery_after_last_admission_ms": 4286,
+      "inventory": {
+        "total": 1000000,
+        "available": 997000,
+        "held": 3000,
+        "quota": 3000,
+        "max_per_user": 1,
+        "valid": true
+      },
+      "sampled_min_free_mb": 6385,
+      "raw_k6_summary": ".runtime/load-2026-11-08/normal-100.summary.json"
+    },
+    {
+      "label": "normal-500",
+      "scenario": {
+        "profile": "default",
+        "target_rps": 500,
+        "duration_seconds": 20,
+        "preallocated_vus": 200,
+        "max_vus": 500
+      },
+      "activity_id": "2b597729-8d14-4875-969c-a074b7a45722",
+      "http_requests": 10001,
+      "actual_http_rps": 499.9916184786684,
+      "accepted": 4000,
+      "throttled": 6001,
+      "unexpected_rate": 0,
+      "accepted_p95_ms": 179.47226999999998,
+      "dropped_iterations": 0,
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 4000,
+          "quantity": 4000,
+          "avg_processing_ms": 14105,
+          "max_processing_ms": 23062
+        }
+      ],
+      "reserved_processing_ms": {
+        "p50": 15464,
+        "p95": 21658,
+        "max": 23062
+      },
+      "recovery_after_last_admission_ms": 23062,
+      "inventory": {
+        "total": 1000000,
+        "available": 996000,
+        "held": 4000,
+        "quota": 4000,
+        "max_per_user": 1,
+        "valid": true
+      },
+      "sampled_min_free_mb": 6072,
+      "raw_k6_summary": ".runtime/load-2026-11-08/normal-500.summary.json"
+    },
+    {
+      "label": "raised-500",
+      "scenario": {
+        "profile": "raised",
+        "target_rps": 500,
+        "duration_seconds": 20,
+        "preallocated_vus": 200,
+        "max_vus": 500
+      },
+      "activity_id": "3b2e2ac7-e2e4-42cc-a68a-add8d4be9099",
+      "http_requests": 10001,
+      "actual_http_rps": 498.84097409631204,
+      "accepted": 10001,
+      "throttled": 0,
+      "unexpected_rate": 0,
+      "accepted_p95_ms": 157.7285,
+      "dropped_iterations": 0,
+      "final_states": [
+        {
+          "state": "REJECTED",
+          "reason": "QUEUE_TIMEOUT",
+          "count": 7849,
+          "quantity": 7849,
+          "avg_processing_ms": 64784,
+          "max_processing_ms": 95174
+        },
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 2152,
+          "quantity": 2152,
+          "avg_processing_ms": 17883,
+          "max_processing_ms": 29998
+        }
+      ],
+      "reserved_processing_ms": {
+        "p50": 20186,
+        "p95": 28941,
+        "max": 29998
+      },
+      "recovery_after_last_admission_ms": 95171,
+      "inventory": {
+        "total": 1000000,
+        "available": 997848,
+        "held": 2152,
+        "quota": 2152,
+        "max_per_user": 1,
+        "valid": true
+      },
+      "sampled_min_free_mb": null,
+      "raw_k6_summary": ".runtime/load-2026-11-08/raised-500.summary.json"
+    },
+    {
+      "label": "spike-2000",
+      "scenario": {
+        "profile": "raised",
+        "target_rps": 2000,
+        "duration_seconds": 5,
+        "preallocated_vus": 200,
+        "max_vus": 500
+      },
+      "activity_id": "730bda46-a467-4da1-ac7a-81e9cb122cbb",
+      "http_requests": 3973,
+      "actual_http_rps": 698.4102351325593,
+      "accepted": 3973,
+      "throttled": 0,
+      "unexpected_rate": 0,
+      "accepted_p95_ms": 847.32706,
+      "dropped_iterations": 6027,
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 2958,
+          "quantity": 2958,
+          "avg_processing_ms": 17601,
+          "max_processing_ms": 29999
+        },
+        {
+          "state": "REJECTED",
+          "reason": "QUEUE_TIMEOUT",
+          "count": 1015,
+          "quantity": 1015,
+          "avg_processing_ms": 33637,
+          "max_processing_ms": 37530
+        }
+      ],
+      "reserved_processing_ms": {
+        "p50": 17654,
+        "p95": 28757,
+        "max": 29999
+      },
+      "recovery_after_last_admission_ms": 37530,
+      "inventory": {
+        "total": 1000000,
+        "available": 997042,
+        "held": 2958,
+        "quota": 2958,
+        "max_per_user": 1,
+        "valid": true
+      },
+      "sampled_min_free_mb": 6197,
+      "raw_k6_summary": ".runtime/load-2026-11-08/spike-2000.summary.json"
+    },
+    {
+      "label": "spike-2000-v1000",
+      "scenario": {
+        "profile": "raised",
+        "target_rps": 2000,
+        "duration_seconds": 5,
+        "preallocated_vus": 1000,
+        "max_vus": 1000
+      },
+      "activity_id": "7bf3d8d5-e7a3-4eb9-b79e-6b3a5966f5c6",
+      "http_requests": 5088,
+      "actual_http_rps": 814.8466859874588,
+      "accepted": 5088,
+      "throttled": 0,
+      "unexpected_rate": 0,
+      "accepted_p95_ms": 1392.14032,
+      "dropped_iterations": 4912,
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 2816,
+          "quantity": 2816,
+          "avg_processing_ms": 18014,
+          "max_processing_ms": 29997
+        },
+        {
+          "state": "REJECTED",
+          "reason": "QUEUE_TIMEOUT",
+          "count": 2272,
+          "quantity": 2272,
+          "avg_processing_ms": 38901,
+          "max_processing_ms": 47652
+        }
+      ],
+      "reserved_processing_ms": {
+        "p50": 18249,
+        "p95": 28862,
+        "max": 29997
+      },
+      "recovery_after_last_admission_ms": 47624,
+      "inventory": {
+        "total": 1000000,
+        "available": 997184,
+        "held": 2816,
+        "quota": 2816,
+        "max_per_user": 1,
+        "valid": true
+      },
+      "sampled_min_free_mb": 6336,
+      "raw_k6_summary": ".runtime/load-2026-11-08/spike-2000-v1000.summary.json"
+    },
+    {
+      "label": "scarce-100",
+      "scenario": {
+        "profile": "raised",
+        "target_rps": 200,
+        "duration_seconds": 5,
+        "preallocated_vus": 200,
+        "max_vus": 500
+      },
+      "activity_id": "8912913b-5009-4ccf-a6d6-76ee2b241aca",
+      "http_requests": 1001,
+      "actual_http_rps": 199.1595942627632,
+      "accepted": 1001,
+      "throttled": 0,
+      "unexpected_rate": 0,
+      "accepted_p95_ms": 66.8199,
+      "dropped_iterations": 0,
+      "final_states": [
+        {
+          "state": "REJECTED",
+          "reason": "SOLD_OUT",
+          "count": 901,
+          "quantity": 901,
+          "avg_processing_ms": 3411,
+          "max_processing_ms": 5170
+        },
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 100,
+          "quantity": 100,
+          "avg_processing_ms": 572,
+          "max_processing_ms": 980
+        }
+      ],
+      "reserved_processing_ms": {
+        "p50": 578,
+        "p95": 929,
+        "max": 980
+      },
+      "recovery_after_last_admission_ms": 5135,
+      "inventory": {
+        "total": 100,
+        "available": 0,
+        "held": 100,
+        "quota": 100,
+        "max_per_user": 1,
+        "valid": true
+      },
+      "sampled_min_free_mb": 6374,
+      "raw_k6_summary": ".runtime/load-2026-11-08/scarce-100.summary.json"
+    },
+    {
+      "label": "recovery-75",
+      "scenario": {
+        "profile": "raised",
+        "target_rps": 75,
+        "duration_seconds": 20,
+        "preallocated_vus": 200,
+        "max_vus": 500
+      },
+      "activity_id": "b2707cae-069d-4564-b5a5-cef40eaad315",
+      "http_requests": 1501,
+      "actual_http_rps": 74.83106115205784,
+      "accepted": 1501,
+      "throttled": 0,
+      "unexpected_rate": 0,
+      "accepted_p95_ms": 84.2668,
+      "dropped_iterations": 0,
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 1501,
+          "quantity": 1501,
+          "avg_processing_ms": 485,
+          "max_processing_ms": 1710
+        }
+      ],
+      "reserved_processing_ms": {
+        "p50": 248,
+        "p95": 1518,
+        "max": 1710
+      },
+      "recovery_after_last_admission_ms": 1435,
+      "inventory": {
+        "total": 1000000,
+        "available": 998499,
+        "held": 1501,
+        "quota": 1501,
+        "max_per_user": 1,
+        "valid": true
+      },
+      "sampled_min_free_mb": 6290,
+      "raw_k6_summary": ".runtime/load-2026-11-08/recovery-75.summary.json"
+    }
+  ]
+}
