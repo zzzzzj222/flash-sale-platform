@@ -1,0 +1,52 @@
+name: flash-sale-platform
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Run scripts/init.ps1 first}
+      MYSQL_DATABASE: flashsale
+      MYSQL_USER: flashsale
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Run scripts/init.ps1 first}
+    ports:
+      - "127.0.0.1:13306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_PASSWORD mysql -u flashsale -D flashsale -e 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_bin"]
+  redis:
+    image: redis:8.2
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Run scripts/init.ps1 first}
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    ports:
+      - "127.0.0.1:16379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  rabbitmq:
+    image: rabbitmq:4.2-management
+    environment:
+      RABBITMQ_DEFAULT_USER: flashsale
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Run scripts/init.ps1 first}
+    ports:
+      - "127.0.0.1:15673:5672"
+      - "127.0.0.1:15674:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+volumes:
+  mysql-data:
+  redis-data:
+  rabbitmq-data:

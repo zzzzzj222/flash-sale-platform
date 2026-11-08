@@ -1,0 +1,78 @@
+server:
+  port: ${SERVER_PORT:18080}
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  shutdown: graceful
+spring:
+  task:
+    scheduling:
+      pool:
+        size: 3
+  application:
+    name: flash-sale-service
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://localhost:13306/flashsale?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&characterEncoding=UTF-8}
+    username: ${MYSQL_USER:flashsale}
+    password: ${MYSQL_PASSWORD}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:16}
+      connection-timeout: 3000
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:16379}
+      password: ${REDIS_PASSWORD}
+      timeout: 1s
+      connect-timeout: 1s
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:15673}
+    username: ${RABBITMQ_USER:flashsale}
+    password: ${RABBITMQ_PASSWORD}
+    connection-timeout: 2s
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    requested-heartbeat: 10s
+    cache:
+      channel:
+        size: 40
+    template:
+      mandatory: true
+    listener:
+      simple:
+        concurrency: ${CONSUMERS:2}
+        max-concurrency: ${MAX_CONSUMERS:4}
+        prefetch: 8
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 500ms
+sale:
+  demo-enabled: ${DEMO_ENABLED:false}
+  workers-enabled: ${WORKERS_ENABLED:true}
+  queue-name: ${SALE_QUEUE:flashsale.requests.v1}
+  queue-limit: ${QUEUE_LIMIT:10000}
+  admission-global-per-second: ${ADMISSION_GLOBAL:500}
+  admission-client-per-second: ${ADMISSION_CLIENT:200}
+  admission-user-per-second: ${ADMISSION_USER:3}
+  clients:
+    - id: demo
+      secret: ${SALE_CLIENT_SECRET}
+      admin: true
+      operator: true
+      webhook-url: ${SALE_WEBHOOK_URL:}
+      webhook-secret: ${SALE_WEBHOOK_SECRET:}
+    - id: partner
+      secret: ${SALE_PARTNER_SECRET}
+      admin: true
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+logging:
+  level:
+    com.flashsale: INFO

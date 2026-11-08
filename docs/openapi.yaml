@@ -1,0 +1,239 @@
+openapi: 3.1.0
+info:
+  title: 通用秒杀服务
+  version: 0.1.0
+  description: 可信业务后端通过接入方身份调用。202 表示请求已持久化，RESERVED 表示获得限时预占。
+servers:
+  - url: http://127.0.0.1:18080
+security:
+  - ClientAuth: []
+paths:
+  /api/v1/activities:
+    get:
+      operationId: listActivities
+      summary: 查询当前接入方最近 100 场活动
+      responses:
+        '200':
+          description: 活动列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Activity'
+    post:
+      operationId: createActivity
+      summary: 创建活动，需要管理员权限
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateActivity'
+      responses:
+        '201':
+          description: 创建完成
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Activity'
+        '400':
+          $ref: '#/components/responses/Error'
+  /api/v1/activities/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getActivity
+      summary: 查看活动与配额
+      responses:
+        '200':
+          description: 活动
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Activity'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/requests:
+    post:
+      operationId: submitRequest
+      summary: 受理抢购，同一次操作重试时复用原请求编号和参数
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [requestId, activityId, userId, quantity]
+              properties:
+                requestId: { type: string, format: uuid }
+                activityId: { type: string, format: uuid }
+                userId: { type: string, minLength: 1, maxLength: 128 }
+                quantity: { type: integer, minimum: 1, maximum: 10000 }
+      responses:
+        '202':
+          description: 已受理或原请求结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/v1/requests/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getRequest
+      summary: 查询抢购状态
+      responses:
+        '200':
+          description: 抢购结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/requests/{id}/confirm:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: confirmRequest
+      summary: 业务后端核验支付后确认成交
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId]
+              properties:
+                orderId: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: 确认成功或重复确认
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '409':
+          description: 订单冲突、无效状态或已过期。可查询最终状态。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Error'
+                  - $ref: '#/components/schemas/Reservation'
+  /api/v1/requests/{id}/release:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: releaseRequest
+      summary: 取消排队或预占，释放配额
+      responses:
+        '200':
+          description: 当前结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/events/failed:
+    get:
+      operationId: failedEvents
+      summary: 查询失败通知，需要管理员权限
+      responses:
+        '200':
+          description: 最近 100 条失败通知
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    eventId: { type: string, format: uuid }
+                    requestId: { type: string, format: uuid }
+                    destination: { type: string }
+                    status: { type: string }
+                    attempts: { type: integer }
+                    lastError: { type: [string, 'null'] }
+  /api/v1/events/{id}/retry:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: retryEvent
+      summary: 重投失败通知，需要管理员权限
+      responses:
+        '204':
+          description: 已安排重投
+        '404':
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    ClientAuth:
+      type: http
+      scheme: basic
+      description: 用户名为接入方编号，密码为随机接入密钥，生产入口使用 HTTPS。
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Error:
+      description: 业务或输入错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    CreateActivity:
+      type: object
+      required: [resourceId, title, stock, limitPerUser, holdSeconds, queueTimeoutSeconds, startsAt, endsAt]
+      properties:
+        resourceId: { type: string, minLength: 1, maxLength: 128 }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        stock: { type: integer, minimum: 1, maximum: 1000000000 }
+        limitPerUser: { type: integer, minimum: 1, maximum: 10000 }
+        holdSeconds: { type: integer, minimum: 1, maximum: 86400 }
+        queueTimeoutSeconds: { type: integer, minimum: 1, maximum: 3600 }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+    Activity:
+      allOf:
+        - $ref: '#/components/schemas/CreateActivity'
+        - type: object
+          required: [id, availableStock]
+          properties:
+            id: { type: string, format: uuid }
+            availableStock: { type: integer, minimum: 0 }
+    Reservation:
+      type: object
+      required: [requestId, activityId, userId, quantity, state, queueDeadline, createdAt, updatedAt]
+      properties:
+        requestId: { type: string, format: uuid }
+        activityId: { type: string, format: uuid }
+        userId: { type: string }
+        quantity: { type: integer, minimum: 1 }
+        state: { type: string, enum: [QUEUED, RESERVED, CONFIRMED, RELEASED, EXPIRED, REJECTED] }
+        reason: { type: [string, 'null'] }
+        orderId: { type: [string, 'null'] }
+        queueDeadline: { type: string, format: date-time }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
