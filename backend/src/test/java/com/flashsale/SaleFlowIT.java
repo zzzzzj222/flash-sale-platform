@@ -28,6 +28,7 @@ import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.DockerClientFactory;
@@ -49,11 +50,42 @@ import static org.awaitility.Awaitility.await;
 class SaleFlowIT {
     static final String SECRET = "integration-only-credential-1234567890";
     static final String HOOK_SECRET = "integration-webhook-secret-1234567890";
-    @Container static final MySQLContainer MYSQL = new MySQLContainer("mysql:8.4").withDatabaseName("flashsale");
-    @Container static final GenericContainer<?> REDIS = new GenericContainer<>("redis:8.2")
-            .withExposedPorts(6379).withCommand("redis-server", "--requirepass", SECRET);
-    @Container static final GenericContainer<?> RABBIT = new GenericContainer<>("rabbitmq:4.2-management")
-            .withEnv("RABBITMQ_DEFAULT_USER", "flashsale").withEnv("RABBITMQ_DEFAULT_PASS", SECRET).withExposedPorts(5672);
+    @Container static final MySQLContainer MYSQL = mysqlContainer();
+    @Container static final GenericContainer<?> REDIS = redisContainer();
+    @Container static final GenericContainer<?> RABBIT = rabbitContainer();
+
+    /**
+     * 作用：配置集成测试使用的 MySQL 容器，数据库名为 flashsale。
+     * @return 尚未启动、由 Testcontainers 管理生命周期的 MySQL 容器
+     */
+    static MySQLContainer mysqlContainer() {
+        var container = new MySQLContainer("mysql:8.4");
+        container.withDatabaseName("flashsale");
+        return container;
+    }
+
+    /**
+     * 作用：配置启用密码认证并暴露 6379 端口的 Redis 测试容器。
+     * @return 尚未启动、由 Testcontainers 管理生命周期的 Redis 容器
+     */
+    static GenericContainer<?> redisContainer() {
+        var container = new GenericContainer<>("redis:8.2");
+        container.withExposedPorts(6379);
+        container.withCommand("redis-server", "--requirepass", SECRET);
+        return container;
+    }
+
+    /**
+     * 作用：配置测试账号并暴露 AMQP 端口的 RabbitMQ 测试容器。
+     * @return 尚未启动、由 Testcontainers 管理生命周期的 RabbitMQ 容器
+     */
+    static GenericContainer<?> rabbitContainer() {
+        var container = new GenericContainer<>("rabbitmq:4.2-management");
+        container.withEnv("RABBITMQ_DEFAULT_USER", "flashsale");
+        container.withEnv("RABBITMQ_DEFAULT_PASS", SECRET);
+        container.withExposedPorts(5672);
+        return container;
+    }
 
     record Hook(String eventId, String timestamp, String signature, String body) {}
     static final List<Hook> HOOKS = new CopyOnWriteArrayList<>();
@@ -61,6 +93,11 @@ class SaleFlowIT {
     static final Set<String> FAILED = ConcurrentHashMap.newKeySet();
     static final HttpServer WEBHOOK = webhookServer();
 
+    /**
+     * 作用：启动本地 Webhook 接收服务，记录事件头和正文；指定请求首次回调返回 503，其余返回 204。
+     * @return 已启动、监听本机随机端口的 HTTP 服务
+     * @throws IllegalStateException 服务创建失败时抛出
+     */
     static HttpServer webhookServer() {
         try {
             var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -78,6 +115,10 @@ class SaleFlowIT {
         } catch (java.io.IOException error) { throw new IllegalStateException(error); }
     }
 
+    /**
+     * 作用：向 Spring 测试上下文注册客户端权限、容器连接信息、独立队列和 Webhook 配置。
+     * @param registry 测试上下文的动态属性注册器
+     */
     @DynamicPropertySource
     static void services(DynamicPropertyRegistry registry) {
         registry.add("sale.clients[0].id", () -> "demo");
@@ -108,16 +149,29 @@ class SaleFlowIT {
     @Value("${local.server.port}") int port;
     @Autowired ObjectMapper json;
     @Autowired SaleStore store;
+    @Autowired StringRedisTemplate redis;
     @Autowired SaleService sales;
     @Autowired RabbitTemplate rabbit;
     @Autowired SaleProperties properties;
     @Autowired RabbitListenerEndpointRegistry listeners;
     final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
 
+    /**
+     * 作用：在本类全部测试结束后停止本地 Webhook 接收服务。
+     */
     @AfterAll static void closeWebhook() { WEBHOOK.stop(0); }
 
     record Response(int status, String body) {}
 
+    /**
+     * 作用：向测试应用发送 HTTP 请求，按需添加 Basic 认证并将请求体序列化为 JSON。
+     * @param tenant 客户端标识，传 null 时不携带认证信息
+     * @param method HTTP 请求方法
+     * @param path 以斜杠开头的接口路径
+     * @param body 请求体对象，传 null 时发送空请求体
+     * @return 包含 HTTP 状态码和响应正文的结果
+     * @throws IllegalStateException 请求构建、序列化或发送失败时抛出
+     */
     Response call(String tenant, String method, String path, Object body) {
         try {
             var builder = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).timeout(Duration.ofSeconds(20));
@@ -133,6 +187,14 @@ class SaleFlowIT {
         } catch (Exception error) { throw new IllegalStateException(error); }
     }
 
+    /**
+     * 作用：通过接口创建当前可参与的测试活动，断言创建成功并解析活动信息。
+     * @param tenant 创建活动的客户端标识
+     * @param stock 活动初始库存
+     * @param limit 每个用户的限购数量
+     * @param holdSeconds 预占有效期，单位为秒
+     * @return 创建成功的活动信息
+     */
     ActivityView activity(String tenant, int stock, int limit, int holdSeconds) {
         var input = new CreateActivity("resource-" + UUID.randomUUID(), "集成测试活动", stock, limit, holdSeconds,
                 60, Instant.now().minusSeconds(2), Instant.now().plusSeconds(600));
@@ -141,21 +203,42 @@ class SaleFlowIT {
         return json.readValue(response.body(), ActivityView.class);
     }
 
+    /**
+     * 作用：为指定活动和用户构造购买数量为 1、请求标识随机生成的预占请求。
+     * @param activity 参与预占的活动
+     * @param user 用户标识
+     * @return 尚未提交的预占请求
+     */
     Reserve request(ActivityView activity, String user) {
         return new Reserve(UUID.randomUUID(), UUID.fromString(activity.id()), user, 1);
     }
 
+    /**
+     * 作用：通过接口提交预占请求，并断言返回 202，表示请求已被接受。
+     * @param tenant 提交请求的客户端标识
+     * @param request 待提交的预占请求
+     */
     void submit(String tenant, Reserve request) {
         var response = call(tenant, "POST", "/api/v1/requests", request);
         assertThat(response.status()).as(response.body()).isEqualTo(202);
     }
 
+    /**
+     * 作用：每 100 毫秒查询一次请求状态，最多等待 30 秒，直到请求离开 QUEUED 状态。
+     * @param tenant 请求所属的客户端标识
+     * @param id 预占请求标识
+     * @return 离开排队状态后再次查询到的预占结果，不保证预占成功
+     */
     ReservationView completed(String tenant, UUID id) {
         await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(100))
                 .until(() -> !sales.result(tenant, id.toString()).state().equals("QUEUED"));
         return sales.result(tenant, id.toString());
     }
 
+    /**
+     * 作用：验证 64 个用户并发抢购 10 件库存时恰好成功 10 次，失败 54 次，库存和已用配额一致。
+     * @throws Exception 等待并发任务时发生中断或任务执行失败时抛出
+     */
     @Test
     void sixtyFourConcurrentBuyersCannotOversellTenUnits() throws Exception {
         var activity = activity("demo", 10, 1, 120);
@@ -173,6 +256,10 @@ class SaleFlowIT {
                 .param(activity.id()).query(Integer.class).single()).isEqualTo(10);
     }
 
+    /**
+     * 作用：验证同一请求并发提交、消息重复投递及再次处理时，只扣减一次库存并保留一条预占记录。
+     * @throws Exception 等待并发任务时发生中断或任务执行失败时抛出
+     */
     @Test
     void duplicateConcurrentSubmissionsAndDuplicateMessagesDeductOnce() throws Exception {
         var activity = activity("demo", 10, 2, 120);
@@ -192,6 +279,10 @@ class SaleFlowIT {
                 .param(input.requestId().toString()).query(Integer.class).single()).isEqualTo(1);
     }
 
+    /**
+     * 作用：验证同一用户并发提交 12 个不同请求时，最多成功预占限购允许的 2 件库存。
+     * @throws Exception 等待并发任务时发生中断或任务执行失败时抛出
+     */
     @Test
     void concurrentRequestsFromOneUserRespectLimit() throws Exception {
         var activity = activity("demo", 20, 2, 120);
@@ -204,6 +295,9 @@ class SaleFlowIT {
         assertThat(sales.activity("demo", activity.id()).availableStock()).isEqualTo(18);
     }
 
+    /**
+     * 作用：验证仅大小写不同的用户标识分别计算限购额度，两个用户均可成功预占。
+     */
     @Test
     void userIdentifiersRemainCaseSensitiveRegardlessOfDatabaseDefaults() {
         var activity = activity("demo", 2, 1, 120);
@@ -215,6 +309,9 @@ class SaleFlowIT {
         assertThat(completed("demo", lower.requestId()).state()).isEqualTo("RESERVED");
     }
 
+    /**
+     * 作用：验证客户端间的活动和请求隔离、未认证访问拦截，以及活动创建和监控接口的角色权限。
+     */
     @Test
     void clientsAreIsolatedAndRolesAreEnforced() {
         var activity = activity("demo", 2, 1, 120);
@@ -235,6 +332,64 @@ class SaleFlowIT {
         assertThat(completed("partner", partnerInput.requestId()).state()).isEqualTo("RESERVED");
     }
 
+    /**
+     * 作用：验证缓存只保存活动规则，预占和释放后的库存仍实时读取，且缓存按客户端隔离。
+     */
+    @Test
+    void cachedActivityRulesKeepStockLiveAcrossReservationAndRelease() {
+        var activity = activity("demo", 2, 1, 120);
+        String key = "flashsale:activity:metadata:v1:demo:" + activity.id();
+        assertThat(redis.hasKey(key)).isFalse();
+        assertThat(sales.activities("demo")).anySatisfy(item -> assertThat(item).isEqualTo(activity));
+        String cached = redis.opsForValue().get(key);
+        var metadata = json.readTree(cached);
+        assertThat(metadata.get("title").asText()).isEqualTo(activity.title());
+        assertThat(metadata.get("limitPerUser").asInt()).isEqualTo(1);
+        assertThat(metadata.has("startsAt")).isTrue();
+        assertThat(metadata.has("availableStock")).isFalse();
+        assertThat(redis.getExpire(key)).isBetween(1L, 360L);
+        assertThat(sales.activity("demo", activity.id())).isEqualTo(activity);
+
+        var input = request(activity, "cached-stock-user");
+        submit("demo", input);
+        assertThat(completed("demo", input.requestId()).state()).isEqualTo("RESERVED");
+        assertThat(sales.activity("demo", activity.id()).availableStock()).isEqualTo(1);
+        assertThat(sales.activities("demo")).anySatisfy(item -> {
+            assertThat(item.id()).isEqualTo(activity.id());
+            assertThat(item.availableStock()).isEqualTo(1);
+        });
+        assertThat(call("demo", "POST", "/api/v1/requests/" + input.requestId() + "/release", null).status()).isEqualTo(200);
+        assertThat(sales.activity("demo", activity.id()).availableStock()).isEqualTo(2);
+        assertThat(redis.opsForValue().get(key)).isEqualTo(cached);
+        assertThat(call("partner", "GET", "/api/v1/activities/" + activity.id(), null).status()).isEqualTo(404);
+        assertThat(redis.hasKey("flashsale:activity:metadata:v1:partner:" + activity.id())).isFalse();
+    }
+
+    /**
+     * 作用：验证活动缓存缺失、内容损坏或过期时，查询会重建缓存并恢复有效期。
+     */
+    @Test
+    void activityCacheMissesAndInvalidEntriesAreRebuilt() {
+        var first = activity("demo", 2, 1, 120);
+        var second = activity("demo", 3, 2, 120);
+        String firstKey = "flashsale:activity:metadata:v1:demo:" + first.id();
+        String secondKey = "flashsale:activity:metadata:v1:demo:" + second.id();
+        sales.activities("demo");
+        redis.delete(firstKey);
+        redis.opsForValue().set(secondKey, "{invalid", Duration.ofMinutes(1));
+        assertThat(sales.activities("demo")).contains(first, second);
+        assertThat(json.readTree(redis.opsForValue().get(firstKey)).get("id").asText()).isEqualTo(first.id());
+        assertThat(json.readTree(redis.opsForValue().get(secondKey)).get("id").asText()).isEqualTo(second.id());
+
+        redis.expire(firstKey, Duration.ofMillis(1));
+        await().atMost(Duration.ofSeconds(5)).until(() -> !redis.hasKey(firstKey));
+        assertThat(sales.activity("demo", first.id())).isEqualTo(first);
+        assertThat(redis.getExpire(firstKey)).isBetween(1L, 360L);
+    }
+
+    /**
+     * 作用：验证同一订单重复确认成功，更换订单号或释放已确认预占返回冲突，且不额外扣减库存。
+     */
     @Test
     void confirmationIsIdempotentAndCannotBeCancelled() {
         var activity = activity("demo", 2, 1, 120);
@@ -249,6 +404,9 @@ class SaleFlowIT {
         assertThat(sales.activity("demo", activity.id()).availableStock()).isEqualTo(1);
     }
 
+    /**
+     * 作用：验证预占超时后自动恢复库存和用户额度，使同一用户能够再次预占。
+     */
     @Test
     void expiryRestoresStockAndQuota() {
         var activity = activity("demo", 1, 1, 1);
@@ -261,6 +419,9 @@ class SaleFlowIT {
         assertThat(completed("demo", again.requestId()).state()).isEqualTo("RESERVED");
     }
 
+    /**
+     * 作用：验证超过预占期限的确认请求返回冲突，同时将预占转为已过期并恢复库存。
+     */
     @Test
     void latePaymentCannotConfirmAnExpiredHold() {
         var activity = activity("demo", 1, 1, 120);
@@ -274,6 +435,9 @@ class SaleFlowIT {
         assertThat(sales.activity("demo", activity.id()).availableStock()).isEqualTo(1);
     }
 
+    /**
+     * 作用：暂停消费以构造排队场景，验证取消或排队超时的请求在后续处理时不会扣减库存。
+     */
     @Test
     void queuedCancellationAndTimeoutCannotDeductLater() {
         listeners.stop();
@@ -295,6 +459,9 @@ class SaleFlowIT {
         } finally { listeners.start(); }
     }
 
+    /**
+     * 作用：暂停 RabbitMQ，验证已接受请求保持排队并记录投递错误，消息服务恢复后可成功预占。
+     */
     @Test
     void brokerOutageKeepsAcceptedRequestAndRecovers() {
         var activity = activity("demo", 2, 1, 120);
@@ -312,18 +479,27 @@ class SaleFlowIT {
         assertThat(sales.activity("demo", activity.id()).availableStock()).isEqualTo(1);
     }
 
+    /**
+     * 作用：暂停 Redis，验证活动查询仍可用，而预占提交返回 503 且不创建请求记录。
+     */
     @Test
     void redisOutageRejectsBeforeCreatingARequest() {
         var activity = activity("demo", 2, 1, 120);
         var input = request(activity, "redis-unavailable");
+        sales.activity("demo", activity.id());
         var docker = DockerClientFactory.instance().client();
         docker.pauseContainerCmd(REDIS.getContainerId()).exec();
         try {
+            assertThat(call("demo", "GET", "/api/v1/activities/" + activity.id(), null).status()).isEqualTo(200);
+            assertThat(call("demo", "GET", "/api/v1/activities", null).status()).isEqualTo(200);
             assertThat(call("demo", "POST", "/api/v1/requests", input).status()).isEqualTo(503);
             assertThat(store.find("demo", input.requestId().toString(), false)).isEmpty();
         } finally { docker.unpauseContainerCmd(REDIS.getContainerId()).exec(); }
     }
 
+    /**
+     * 作用：模拟首次 Webhook 回调失败，验证重试保留事件标识且签名有效，并验证失败事件可由所属客户端重放。
+     */
     @Test
     void webhookRetriesKeepEventIdAndValidSignatureAndCanBeReplayed() {
         var activity = activity("demo", 2, 1, 120);
@@ -347,6 +523,9 @@ class SaleFlowIT {
         await().atMost(Duration.ofSeconds(10)).until(() -> HOOKS.stream().filter(hook -> hook.eventId().equals(eventId)).count() >= 3);
     }
 
+    /**
+     * 作用：验证无效入参返回 400，同一请求标识更改购买数量返回 409，原请求数量和库存扣减保持不变。
+     */
     @Test
     void invalidInputAndChangedIdempotencyPayloadAreRejected() {
         assertThat(call("demo", "POST", "/api/v1/requests", java.util.Map.of("quantity", -1)).status()).isEqualTo(400);

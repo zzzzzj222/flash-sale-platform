@@ -52,9 +52,7 @@ public class SaleService {
      * 按创建时间倒序返回租户最近创建的最多 100 个活动。
      */
     public List<ActivityView> activities(String tenant) {
-        // shortcut: fixed list limits suit the demo; add cursor pagination before large catalogs.
-        return store.jdbc().sql("SELECT * FROM activities WHERE tenant_id=? ORDER BY created_at_ms DESC LIMIT 100")
-                .param(tenant).query(SaleStore::activityRow).list();
+        return store.activities(tenant);
     }
 
     /**

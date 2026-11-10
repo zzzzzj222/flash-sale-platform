@@ -2,22 +2,41 @@ package com.flashsale.core;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
 import com.flashsale.api.ApiException;
 import com.flashsale.api.Contracts.ActivityView;
 import com.flashsale.api.Contracts.ReservationView;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 @Repository
 public class SaleStore {
+    private static final Logger log = LoggerFactory.getLogger(SaleStore.class);
     private final JdbcClient jdbc;
+    private final StringRedisTemplate redis;
+    private final ObjectMapper json;
 
     /**
-     * 初始化活动、预占及相关业务数据共用的 JDBC 客户端。
+     * 初始化业务数据访问及活动规则缓存组件。
      */
-    public SaleStore(JdbcClient jdbc) { this.jdbc = jdbc; }
+    public SaleStore(JdbcClient jdbc, StringRedisTemplate redis, ObjectMapper json) {
+        this.jdbc = jdbc;
+        this.redis = redis;
+        this.json = json;
+    }
 
     /**
      * 返回底层 JDBC 客户端，供业务组件执行数据库操作。
@@ -38,8 +57,88 @@ public class SaleStore {
      * @param lock 是否追加 FOR UPDATE，由调用方在事务内持有行锁
      */
     public ActivityView activity(String tenant, String id, boolean lock) {
-        return jdbc.sql("SELECT * FROM activities WHERE tenant_id=? AND id=?" + (lock ? " FOR UPDATE" : ""))
-                .params(tenant, id).query(SaleStore::activityRow).optional().orElseThrow(ApiException::notFound);
+        // 事务内直读数据库，避免缓存未提交数据或使用缓存参与库存判断。
+        if (lock || TransactionSynchronizationManager.isActualTransactionActive()) {
+            return jdbc.sql("SELECT * FROM activities WHERE tenant_id=? AND id=?" + (lock ? " FOR UPDATE" : ""))
+                    .params(tenant, id).query(SaleStore::activityRow).optional().orElseThrow(ApiException::notFound);
+        }
+        int stock = jdbc.sql("SELECT available_stock FROM activities WHERE tenant_id=? AND id=?")
+                .params(tenant, id).query(Integer.class).optional().orElseThrow(ApiException::notFound);
+        return activityMetadata(tenant, List.of(id)).get(id).view(stock);
+    }
+
+    /**
+     * 返回最近 100 个活动，批量缓存活动规则并实时查询可用库存。
+     */
+    public List<ActivityView> activities(String tenant) {
+        // shortcut: fixed list limits suit the demo; add cursor pagination before large catalogs.
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            return jdbc.sql("SELECT * FROM activities WHERE tenant_id=? ORDER BY created_at_ms DESC LIMIT 100")
+                    .param(tenant).query(SaleStore::activityRow).list();
+        }
+        var stocks = jdbc.sql("SELECT id,available_stock FROM activities WHERE tenant_id=? ORDER BY created_at_ms DESC LIMIT 100")
+                .param(tenant).query((row, index) -> new ActivityStock(row.getString("id"), row.getInt("available_stock"))).list();
+        if (stocks.isEmpty()) { return List.of(); }
+        var metadata = activityMetadata(tenant, stocks.stream().map(ActivityStock::id).toList());
+        return stocks.stream().map(stock -> metadata.get(stock.id()).view(stock.availableStock())).toList();
+    }
+
+    // shortcut: 活动规则创建后不可修改，新增编辑入口时须同步失效规则缓存。
+    private Map<String, ActivityMetadata> activityMetadata(String tenant, List<String> ids) {
+        var result = new HashMap<String, ActivityMetadata>();
+        var keys = ids.stream().map(id -> "flashsale:activity:metadata:v1:" + tenant + ":" + id).toList();
+        boolean cacheAvailable = true;
+        try {
+            var cached = redis.opsForValue().multiGet(keys);
+            if (cached != null) {
+                for (int index = 0; index < ids.size(); index++) {
+                    if (cached.get(index) != null) {
+                        var item = json.readValue(cached.get(index), ActivityMetadata.class);
+                        if (item != null && ids.get(index).equals(item.id())) { result.put(item.id(), item); }
+                    }
+                }
+            }
+        } catch (DataAccessException error) {
+            cacheAvailable = false;
+            log.debug("Activity metadata cache read failed", error);
+        } catch (JacksonException error) {
+            log.debug("Activity metadata cache read failed", error);
+        }
+        var missing = ids.stream().filter(id -> !result.containsKey(id)).toList();
+        if (!missing.isEmpty()) {
+            var loaded = jdbc.sql("SELECT * FROM activities WHERE tenant_id=:tenant AND id IN (:ids)")
+                    .param("tenant", tenant).param("ids", missing).query(SaleStore::activityRow).list()
+                    .stream().map(ActivityMetadata::from).toList();
+            for (var item : loaded) { result.put(item.id(), item); }
+            if (cacheAvailable) {
+                try {
+                    for (var item : loaded) {
+                        redis.opsForValue().set("flashsale:activity:metadata:v1:" + tenant + ":" + item.id(),
+                                json.writeValueAsString(item), Duration.ofSeconds(ThreadLocalRandom.current().nextLong(300, 361)));
+                    }
+                } catch (DataAccessException | JacksonException error) {
+                    log.debug("Activity metadata cache write failed", error);
+                }
+            }
+        }
+        if (result.size() != ids.size()) { throw ApiException.notFound(); }
+        return result;
+    }
+
+    private record ActivityStock(String id, int availableStock) {}
+
+    record ActivityMetadata(String id, String resourceId, String title, int stock, int limitPerUser,
+                            int holdSeconds, int queueTimeoutSeconds, Instant startsAt, Instant endsAt) {
+        static ActivityMetadata from(ActivityView activity) {
+            return new ActivityMetadata(activity.id(), activity.resourceId(), activity.title(), activity.stock(),
+                    activity.limitPerUser(), activity.holdSeconds(), activity.queueTimeoutSeconds(),
+                    activity.startsAt(), activity.endsAt());
+        }
+
+        ActivityView view(int availableStock) {
+            return new ActivityView(id, resourceId, title, stock, availableStock, limitPerUser,
+                    holdSeconds, queueTimeoutSeconds, startsAt, endsAt);
+        }
     }
 
     /**
