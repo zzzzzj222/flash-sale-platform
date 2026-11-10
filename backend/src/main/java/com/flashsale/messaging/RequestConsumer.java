@@ -22,6 +22,6 @@ public class RequestConsumer {
     @RabbitListener(queues = "${sale.queue-name}")
     public void receive(Message message) {
         var request = json.readValue(message.getBody(), RequestMessage.class);
-        service.process(request.tenantId(), request.requestId());
+        service.process(request);
     }
 }

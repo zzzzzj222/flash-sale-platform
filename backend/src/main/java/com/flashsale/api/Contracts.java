@@ -94,12 +94,15 @@ public final class Contracts {
                                   Instant expiresAt, Instant createdAt, Instant updatedAt) {}
 
     /**
-     * 传递待处理预占请求的定位信息。
+     * 传递待落库的完整申请，保留旧版仅包含定位信息的消息兼容性。
      *
      * @param tenantId 请求所属的租户标识
      * @param requestId 预占请求编号
+     * @param reservation 预扣申请快照，旧版消息为 null
      */
-    public record RequestMessage(String tenantId, String requestId) {}
+    public record RequestMessage(String tenantId, String requestId, ReservationView reservation) {
+        public RequestMessage(String tenantId, String requestId) { this(tenantId, requestId, null); }
+    }
 
     /**
      * 携带预占状态变化信息的业务事件，用于 Webhook 通知。

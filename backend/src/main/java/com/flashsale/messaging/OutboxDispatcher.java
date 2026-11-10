@@ -17,6 +17,12 @@ import javax.crypto.spec.SecretKeySpec;
 import jakarta.annotation.PreDestroy;
 import com.flashsale.SaleProperties;
 import com.flashsale.core.SaleService;
+import com.flashsale.core.Preallocation;
+import com.flashsale.api.Contracts.RequestMessage;
+import com.flashsale.api.Contracts.ReservationView;
+import org.springframework.dao.DataAccessException;
+import java.util.ArrayList;
+import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.Message;
@@ -36,27 +42,61 @@ public class OutboxDispatcher {
     private final SaleService sales;
     private final SaleProperties properties;
     private final RabbitTemplate rabbit;
+    private final Preallocation preallocation;
+    private final ObjectMapper json;
     private final ExecutorService deliveries = Executors.newFixedThreadPool(16,
             Thread.ofVirtual().name("outbox-", 0).factory());
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2))
             .followRedirects(HttpClient.Redirect.NEVER).build();
 
-    public OutboxDispatcher(OutboxService outbox, SaleService sales, SaleProperties properties, RabbitTemplate rabbit) {
+    public OutboxDispatcher(OutboxService outbox, SaleService sales, SaleProperties properties, RabbitTemplate rabbit,
+                            Preallocation preallocation, ObjectMapper json) {
         this.outbox = outbox;
         this.sales = sales;
         this.properties = properties;
         this.rabbit = rabbit;
+        this.preallocation = preallocation;
+        this.json = json;
     }
 
     @Scheduled(fixedDelayString = "${sale.dispatch-delay-ms:100}")
     public void dispatch() {
-        var tasks = outbox.claim().stream().map(event -> CompletableFuture.runAsync(() -> deliver(event), deliveries)).toList();
+        var tasks = new ArrayList<CompletableFuture<Void>>();
+        for (var client : properties.clients()) {
+            try {
+                for (var request : preallocation.claim(client.id())) {
+                    tasks.add(CompletableFuture.runAsync(() -> deliverRequest(request), deliveries));
+                }
+            } catch (DataAccessException error) {
+                log.warn("Redis pending requests unavailable for {}", client.id());
+            }
+        }
+        for (var event : outbox.claim()) {
+            tasks.add(CompletableFuture.runAsync(() -> deliver(event), deliveries));
+        }
         CompletableFuture.allOf(tasks.toArray(CompletableFuture[]::new)).join();
+    }
+
+    private void deliverRequest(RequestMessage request) {
+        try {
+            if (request.reservation().queueDeadline().toEpochMilli() <= System.currentTimeMillis()) {
+                sales.process(request);
+            } else {
+                publish(request.requestId(), json.writeValueAsString(request));
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        } catch (Exception error) {
+            log.warn("Request {} delivery deferred: {}", request.requestId(), error.getClass().getSimpleName());
+        }
     }
 
     private void deliver(OutboxService.Delivery event) {
         try {
             if (event.destination().equals("RABBIT")) { publish(event); }
+            else if (event.destination().equals("REDIS")) {
+                preallocation.synchronize(event.tenant(), json.readValue(event.payload(), ReservationView.class));
+            }
             else { webhook(event); }
             outbox.delivered(event);
         } catch (InterruptedException error) {
@@ -81,12 +121,16 @@ public class OutboxDispatcher {
 
     private void publish(OutboxService.Delivery event) throws Exception {
         if (!sales.result(event.tenant(), event.requestId()).state().equals("QUEUED")) { return; }
+        publish(event.id(), event.payload());
+    }
+
+    private void publish(String messageId, String payload) throws Exception {
         var messageProperties = new MessageProperties();
         messageProperties.setContentType(MessageProperties.CONTENT_TYPE_JSON);
         messageProperties.setDeliveryMode(MessageDeliveryMode.PERSISTENT);
-        messageProperties.setMessageId(event.id());
-        var correlation = new CorrelationData(event.id());
-        rabbit.send("", properties.queueName(), new Message(event.payload().getBytes(StandardCharsets.UTF_8), messageProperties), correlation);
+        messageProperties.setMessageId(messageId);
+        var correlation = new CorrelationData(messageId);
+        rabbit.send("", properties.queueName(), new Message(payload.getBytes(StandardCharsets.UTF_8), messageProperties), correlation);
         var confirmation = correlation.getFuture().get(3, TimeUnit.SECONDS);
         if (!confirmation.ack() || correlation.getReturned() != null) {
             throw new IllegalStateException("Broker did not accept event");

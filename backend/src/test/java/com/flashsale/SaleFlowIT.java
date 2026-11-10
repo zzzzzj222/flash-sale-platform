@@ -19,6 +19,7 @@ import java.util.concurrent.Executors;
 import com.flashsale.api.Contracts.*;
 import com.flashsale.core.SaleService;
 import com.flashsale.core.SaleStore;
+import com.flashsale.core.Preallocation;
 import com.flashsale.messaging.OutboxDispatcher;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
@@ -29,6 +30,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import com.github.dockerjava.api.model.ExposedPort;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.DockerClientFactory;
@@ -71,7 +74,8 @@ class SaleFlowIT {
     static GenericContainer<?> redisContainer() {
         var container = new GenericContainer<>("redis:8.2");
         container.withExposedPorts(6379);
-        container.withCommand("redis-server", "--requirepass", SECRET);
+        container.withCommand("redis-server", "--appendonly", "yes", "--appendfsync", "always",
+                "--maxmemory-policy", "noeviction", "--requirepass", SECRET);
         return container;
     }
 
@@ -150,7 +154,9 @@ class SaleFlowIT {
     @Autowired ObjectMapper json;
     @Autowired SaleStore store;
     @Autowired StringRedisTemplate redis;
+    @Autowired LettuceConnectionFactory redisConnections;
     @Autowired SaleService sales;
+    @Autowired Preallocation preallocation;
     @Autowired RabbitTemplate rabbit;
     @Autowired SaleProperties properties;
     @Autowired RabbitListenerEndpointRegistry listeners;
@@ -448,8 +454,11 @@ class SaleFlowIT {
             assertThat(call("demo", "POST", "/api/v1/requests/" + cancelled.requestId() + "/release", null).status()).isEqualTo(200);
             var timedOut = request(activity, "queued-timeout");
             submit("demo", timedOut);
-            store.jdbc().sql("UPDATE reservations SET queue_deadline_ms=? WHERE tenant_id='demo' AND request_id=?")
-                    .params(store.now() - 1, timedOut.requestId().toString()).update();
+            String stateKey = "flashsale:preallocation:{demo}:state";
+            var pending = (tools.jackson.databind.node.ObjectNode) json.readTree(
+                    (String) redis.opsForHash().get(stateKey, "r:" + timedOut.requestId()));
+            pending.put("queueDeadlineMs", store.now() - 1);
+            redis.opsForHash().put(stateKey, "r:" + timedOut.requestId(), json.writeValueAsString(pending));
             sales.expire("demo", timedOut.requestId().toString());
             sales.process("demo", cancelled.requestId().toString());
             sales.process("demo", timedOut.requestId().toString());
@@ -460,7 +469,7 @@ class SaleFlowIT {
     }
 
     /**
-     * 作用：暂停 RabbitMQ，验证已接受请求保持排队并记录投递错误，消息服务恢复后可成功预占。
+     * 作用：暂停 RabbitMQ，验证申请与预扣保留在 Redis，数据库异步落库，恢复后可成功预占。
      */
     @Test
     void brokerOutageKeepsAcceptedRequestAndRecovers() {
@@ -471,12 +480,115 @@ class SaleFlowIT {
         try {
             submit("demo", input);
             assertThat(sales.result("demo", input.requestId().toString()).state()).isEqualTo("QUEUED");
-            await().atMost(Duration.ofSeconds(15)).until(() -> store.jdbc()
-                    .sql("SELECT COUNT(*) FROM outbox WHERE tenant_id='demo' AND request_id=? AND last_error IS NOT NULL")
-                    .param(input.requestId().toString()).query(Integer.class).single() == 1);
+            assertThat(store.find("demo", input.requestId().toString(), false)).isEmpty();
+            assertThat(redis.opsForHash().get("flashsale:preallocation:{demo}:state", "stock:" + activity.id())).isEqualTo("1");
+            assertThat(redis.opsForZSet().score("flashsale:preallocation:{demo}:pending", input.requestId().toString())).isNotNull();
         } finally { docker.unpauseContainerCmd(RABBIT.getContainerId()).exec(); }
         assertThat(completed("demo", input.requestId()).state()).isEqualTo("RESERVED");
         assertThat(sales.activity("demo", activity.id()).availableStock()).isEqualTo(1);
+    }
+
+    @Test
+    void pendingRequestsSurviveRedisRestartAndDoNotNeedMysqlOnWarmSubmit() {
+        var activity = activity("partner", 3, 2, 120);
+        var first = request(activity, "durable-pending");
+        preallocation.submit("partner", first);
+        listeners.stop();
+        var docker = DockerClientFactory.instance().client();
+        try {
+            var second = request(activity, "no-mysql-submit");
+            docker.pauseContainerCmd(MYSQL.getContainerId()).exec();
+            try {
+                var accepted = preallocation.submit("partner", second);
+                assertThat(accepted.state()).isEqualTo("QUEUED");
+                assertThat(preallocation.submit("partner", second)).isEqualTo(accepted);
+            } finally { docker.unpauseContainerCmd(MYSQL.getContainerId()).exec(); }
+            docker.restartContainerCmd(REDIS.getContainerId()).exec();
+            // Docker Desktop 重启随机端口容器时会重新分配宿主端口。
+            var bindings = docker.inspectContainerCmd(REDIS.getContainerId()).exec().getNetworkSettings().getPorts();
+            int restartedPort = Integer.parseInt(bindings.getBindings().get(ExposedPort.tcp(6379))[0].getHostPortSpec());
+            redisConnections.stop();
+            redisConnections.getStandaloneConfiguration().setPort(restartedPort);
+            redisConnections.start();
+            await().atMost(Duration.ofSeconds(20)).ignoreExceptions().until(() -> redis.hasKey("flashsale:preallocation:{partner}:state"));
+            assertThat(preallocation.find("partner", second.requestId().toString())).isPresent();
+            assertThat(redis.opsForHash().get("flashsale:preallocation:{partner}:state", "stock:" + activity.id())).isEqualTo("1");
+            listeners.start();
+            assertThat(completed("partner", second.requestId()).state()).isEqualTo("RESERVED");
+        } finally { listeners.start(); }
+    }
+
+    @Test
+    void redisCompensationIsRetriedAfterCommittedRelease() {
+        var activity = activity("demo", 1, 1, 120);
+        var input = request(activity, "compensated-user");
+        submit("demo", input);
+        assertThat(completed("demo", input.requestId()).state()).isEqualTo("RESERVED");
+        var docker = DockerClientFactory.instance().client();
+        docker.pauseContainerCmd(REDIS.getContainerId()).exec();
+        try {
+            assertThat(call("demo", "POST", "/api/v1/requests/" + input.requestId() + "/release", null).status()).isEqualTo(200);
+            assertThat(store.reservation("demo", input.requestId().toString(), false).state()).isEqualTo("RELEASED");
+        } finally { docker.unpauseContainerCmd(REDIS.getContainerId()).exec(); }
+        await().atMost(Duration.ofSeconds(20)).until(() -> "1".equals(redis.opsForHash()
+                .get("flashsale:preallocation:{demo}:state", "stock:" + activity.id())));
+        var again = request(activity, "compensated-user");
+        submit("demo", again);
+        assertThat(completed("demo", again.requestId()).state()).isEqualTo("RESERVED");
+    }
+
+    @Test
+    void legacyReservationsAndQuotasAreImportedBeforeAdmission() {
+        var activity = sales.create("reader", new CreateActivity("legacy", "旧版数据迁移", 3, 2, 120, 60,
+                Instant.now().minusSeconds(2), Instant.now().plusSeconds(600)));
+        String legacyId = UUID.randomUUID().toString();
+        long now = store.now();
+        store.jdbc().sql("UPDATE activities SET available_stock=2 WHERE tenant_id='reader' AND id=?").param(activity.id()).update();
+        store.jdbc().sql("INSERT INTO user_quotas VALUES ('reader',?,'legacy-user',1)").param(activity.id()).update();
+        store.jdbc().sql("""
+                INSERT INTO reservations (tenant_id,request_id,activity_id,user_id,quantity,state,
+                queue_deadline_ms,expires_at_ms,created_at_ms,updated_at_ms)
+                VALUES ('reader',?,?,'legacy-user',1,'RESERVED',?,?,?,?)
+                """).params(legacyId, activity.id(), now + 60000, now + 120000, now, now).update();
+        var original = new Reserve(UUID.fromString(legacyId), UUID.fromString(activity.id()), "legacy-user", 1);
+        assertThat(preallocation.submit("reader", original).state()).isEqualTo("RESERVED");
+        var overLimit = new Reserve(UUID.randomUUID(), UUID.fromString(activity.id()), "legacy-user", 2);
+        assertThat(preallocation.submit("reader", overLimit).reason()).isEqualTo("LIMIT_EXCEEDED");
+        var allowed = new Reserve(UUID.randomUUID(), UUID.fromString(activity.id()), "new-user", 2);
+        assertThat(preallocation.submit("reader", allowed).state()).isEqualTo("QUEUED");
+        assertThat(completed("reader", allowed.requestId()).state()).isEqualTo("RESERVED");
+        assertThat(sales.activity("reader", activity.id()).availableStock()).isZero();
+        assertThat(call("reader", "POST", "/api/v1/requests", new Reserve(original.requestId(), original.activityId(), "other-user", 1)).status())
+                .isEqualTo(409);
+    }
+
+    @Test
+    void olderRedisEventsCannotReacquireReleasedStock() {
+        var activity = activity("demo", 1, 1, 120);
+        var input = request(activity, "ordered-events");
+        submit("demo", input);
+        var reserved = completed("demo", input.requestId());
+        sales.release("demo", input.requestId().toString());
+        preallocation.synchronize("demo", reserved);
+        preallocation.synchronize("demo", reserved);
+        assertThat(preallocation.find("demo", input.requestId().toString()).orElseThrow().state()).isEqualTo("RELEASED");
+        assertThat(redis.opsForHash().get("flashsale:preallocation:{demo}:state", "stock:" + activity.id())).isEqualTo("1");
+    }
+
+    @Test
+    void pendingRequestExpiresAndRefundsEvenWhileBrokerIsUnavailable() {
+        var activity = sales.create("partner", new CreateActivity("queue-expiry", "排队超时补偿", 1, 1, 120, 1,
+                Instant.now().minusSeconds(2), Instant.now().plusSeconds(600)));
+        var input = request(activity, "broker-timeout");
+        var docker = DockerClientFactory.instance().client();
+        docker.pauseContainerCmd(RABBIT.getContainerId()).exec();
+        try {
+            submit("partner", input);
+            var result = completed("partner", input.requestId());
+            assertThat(result.state()).isEqualTo("REJECTED");
+            assertThat(result.reason()).isEqualTo("QUEUE_TIMEOUT");
+            assertThat(redis.opsForHash().get("flashsale:preallocation:{partner}:state", "stock:" + activity.id())).isEqualTo("1");
+        } finally { docker.unpauseContainerCmd(RABBIT.getContainerId()).exec(); }
     }
 
     /**

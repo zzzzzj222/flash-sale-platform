@@ -2,6 +2,8 @@ package com.flashsale.core;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.UUID;
 import com.flashsale.SaleProperties;
 import com.flashsale.api.ApiException;
@@ -9,6 +11,9 @@ import com.flashsale.api.Contracts.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.dao.DataAccessException;
 import tools.jackson.databind.ObjectMapper;
 
 @Service
@@ -16,14 +21,16 @@ public class SaleService {
     private final SaleStore store;
     private final SaleProperties properties;
     private final ObjectMapper json;
+    private final Preallocation preallocation;
 
     /**
      * 初始化数据访问、销售配置和事件 JSON 序列化组件。
      */
-    public SaleService(SaleStore store, SaleProperties properties, ObjectMapper json) {
+    public SaleService(SaleStore store, SaleProperties properties, ObjectMapper json, Preallocation preallocation) {
         this.store = store;
         this.properties = properties;
         this.json = json;
+        this.preallocation = preallocation;
     }
 
     /**
@@ -61,37 +68,11 @@ public class SaleService {
     public ActivityView activity(String tenant, String id) { return store.activity(tenant, id, false); }
 
     /**
-     * 幂等提交预占请求，校验活动时间和申请数量，并在同一事务中保存排队记录及消息事件。
-     * 已有请求编号且参数一致时返回原记录，参数不一致时抛出幂等冲突异常。
+     * 在 Redis 原子校验库存、限购和请求编号，保存预扣结果及待投递记录。
+     * MySQL 申请与库存由消息消费者异步落库。
      */
-    @Transactional
     public ReservationView submit(String tenant, Reserve input) {
-        String id = input.requestId().toString();
-        var previous = store.find(tenant, id, false);
-        if (previous.isPresent()) {
-            checkSameRequest(previous.get(), input);
-            return previous.get();
-        }
-        var activity = store.activity(tenant, input.activityId().toString(), false);
-        long now = store.now();
-        if (now < activity.startsAt().toEpochMilli() || now >= activity.endsAt().toEpochMilli()) {
-            throw ApiException.conflict("ACTIVITY_CLOSED", "活动尚未开始或已经结束");
-        }
-        if (input.quantity() > activity.limitPerUser()) {
-            throw ApiException.conflict("LIMIT_EXCEEDED", "本次数量超过每人限购量");
-        }
-        long deadline = Math.min(activity.endsAt().toEpochMilli(), now + activity.queueTimeoutSeconds() * 1000L);
-        store.jdbc().sql("""
-                INSERT INTO reservations (tenant_id,request_id,activity_id,user_id,quantity,state,
-                queue_deadline_ms,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,'QUEUED',?,?,?)
-                ON DUPLICATE KEY UPDATE request_id=request_id
-                """).params(tenant, id, activity.id(), input.userId(), input.quantity(), deadline, now, now).update();
-        var result = store.reservation(tenant, id, true);
-        checkSameRequest(result, input);
-        if (result.state().equals("QUEUED")) {
-            enqueue(tenant, id, "RABBIT", "REQUESTED", new RequestMessage(tenant, id), now);
-        }
-        return result;
+        return preallocation.submit(tenant, input);
     }
 
     /**
@@ -111,8 +92,42 @@ public class SaleService {
      */
     @Transactional
     public void process(String tenant, String requestId) {
+        var pending = preallocation.find(tenant, requestId);
+        pending.filter(view -> view.state().equals("QUEUED") || view.state().equals("REJECTED"))
+                .ifPresent(view -> persistRequest(new RequestMessage(tenant, requestId, view)));
+        processStored(tenant, requestId);
+    }
+
+    @Transactional
+    public void process(RequestMessage message) {
+        persistRequest(message);
+        processStored(message.tenantId(), message.requestId());
+    }
+
+    private void persistRequest(RequestMessage message) {
+        var input = message.reservation();
+        if (input == null) { return; }
+        if (!message.requestId().equals(input.requestId())
+                || !(input.state().equals("QUEUED") || input.state().equals("REJECTED"))) {
+            throw new IllegalArgumentException("Invalid pending reservation message");
+        }
+        store.jdbc().sql("""
+                INSERT INTO reservations (tenant_id,request_id,activity_id,user_id,quantity,state,reason,
+                queue_deadline_ms,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?)
+                ON DUPLICATE KEY UPDATE request_id=request_id
+                """).params(message.tenantId(), input.requestId(), input.activityId(), input.userId(), input.quantity(),
+                input.state(), input.reason(), input.queueDeadline().toEpochMilli(), input.createdAt().toEpochMilli(),
+                input.updatedAt().toEpochMilli()).update();
+        checkSameRequest(store.reservation(message.tenantId(), message.requestId(), true),
+                new Reserve(UUID.fromString(input.requestId()), UUID.fromString(input.activityId()), input.userId(), input.quantity()));
+    }
+
+    private void processStored(String tenant, String requestId) {
         var request = store.reservation(tenant, requestId, true);
-        if (!request.state().equals("QUEUED")) { return; }
+        if (!request.state().equals("QUEUED")) {
+            notifyResult(tenant, request, store.now());
+            return;
+        }
         // shortcut: one activity row serializes stock; consider quota partitioning after hotspot load tests.
         var activity = store.activity(tenant, request.activityId(), true);
         long now = store.now();
@@ -152,14 +167,29 @@ public class SaleService {
     /**
      * 查询指定租户的预占处理结果，请求不存在时抛出资源未找到异常。
      */
-    public ReservationView result(String tenant, String id) { return store.reservation(tenant, id, false); }
+    public ReservationView result(String tenant, String id) {
+        var stored = store.find(tenant, id, false);
+        if (stored.isPresent()) {
+            if (!stored.get().state().equals("QUEUED")) { preallocation.synchronizeQuietly(tenant, stored.get()); }
+            return stored.get();
+        }
+        return preallocation.find(tenant, id).orElseThrow(ApiException::notFound);
+    }
 
     /**
      * 按创建时间倒序返回指定租户内用户最近的最多 30 条预占请求。
      */
     public List<ReservationView> history(String tenant, String user) {
-        return store.jdbc().sql("SELECT * FROM reservations WHERE tenant_id=? AND user_id=? ORDER BY created_at_ms DESC LIMIT 30")
+        var stored = store.jdbc().sql("SELECT * FROM reservations WHERE tenant_id=? AND user_id=? ORDER BY created_at_ms DESC LIMIT 30")
                 .params(tenant, user).query(SaleStore::reservationRow).list();
+        var merged = new HashMap<String, ReservationView>();
+        try {
+            for (var pending : preallocation.history(tenant, user)) { merged.put(pending.requestId(), pending); }
+        } catch (DataAccessException error) {
+            return stored;
+        }
+        for (var request : stored) { merged.put(request.requestId(), request); }
+        return merged.values().stream().sorted(Comparator.comparing(ReservationView::createdAt).reversed()).limit(30).toList();
     }
 
     /**
@@ -195,6 +225,10 @@ public class SaleService {
      */
     @Transactional
     public ReservationView release(String tenant, String id) {
+        if (store.find(tenant, id, false).isEmpty()) {
+            var pending = preallocation.find(tenant, id).orElseThrow(ApiException::notFound);
+            persistRequest(new RequestMessage(tenant, id, pending));
+        }
         var request = store.reservation(tenant, id, true);
         long now = store.now();
         return switch (request.state()) {
@@ -212,6 +246,10 @@ public class SaleService {
      */
     @Transactional
     public void expire(String tenant, String id) {
+        if (store.find(tenant, id, false).isEmpty()) {
+            var pending = preallocation.find(tenant, id).orElseThrow(ApiException::notFound);
+            persistRequest(new RequestMessage(tenant, id, pending));
+        }
         var request = store.reservation(tenant, id, true);
         long now = store.now();
         if (request.state().equals("RESERVED") && request.expiresAt().toEpochMilli() <= now) {
@@ -252,25 +290,20 @@ public class SaleService {
     }
 
     /**
-     * 为已配置 Webhook 的租户构造预占状态事件，并写入 outbox 等待异步投递。
+     * 在事务内登记 Redis 台账同步任务和可选 Webhook，提交后立即尝试同步 Redis。
      */
     private void notifyResult(String tenant, ReservationView result, long now) {
+        insertEvent(UUID.randomUUID().toString(), tenant, result.requestId(), "REDIS", "REDIS_" + result.state(),
+                json.writeValueAsString(result), now);
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override public void afterCommit() { preallocation.synchronizeQuietly(tenant, result); }
+        });
         if (properties.client(tenant).hasWebhook()) {
             String eventId = UUID.randomUUID().toString();
             var event = new BusinessEvent(eventId, "reservation." + result.state().toLowerCase(java.util.Locale.ROOT),
                     Instant.ofEpochMilli(now), result);
             insertEvent(eventId, tenant, result.requestId(), "WEBHOOK", result.state(), json.writeValueAsString(event), now);
         }
-    }
-
-    /**
-     * 生成事件编号并将消息体序列化为 JSON，写入 outbox 等待异步发送。
-     *
-     * @param destination 消息投递目标，当前排队请求使用 RABBIT
-     * @param key 事件类型标识，与租户和请求编号共同用于事件去重
-     */
-    private void enqueue(String tenant, String id, String destination, String key, Object payload, long now) {
-        insertEvent(UUID.randomUUID().toString(), tenant, id, destination, key, json.writeValueAsString(payload), now);
     }
 
     /**
