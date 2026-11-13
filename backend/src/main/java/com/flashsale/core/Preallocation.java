@@ -6,6 +6,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.UUID;
+import com.flashsale.SaleProperties;
 import com.flashsale.api.ApiException;
 import com.flashsale.api.Contracts.*;
 import org.slf4j.Logger;
@@ -53,12 +57,57 @@ public class Preallocation {
             for _, id in ipairs(ids) do
                 local request = redis.call('HGET', KEYS[1], 'r:' .. id)
                 if request then
-                    redis.call('ZADD', KEYS[2], now + 5000, id)
+                    local retry = cjson.decode(redis.call('HGET', KEYS[1], 'd:' .. id) or '{"failures":0,"publications":0}')
+                    retry.token = ARGV[1]
+                    redis.call('HSET', KEYS[1], 'd:' .. id, cjson.encode(retry))
+                    local deadline = cjson.decode(request).queueDeadlineMs
+                    local nextAttempt = now + tonumber(ARGV[2])
+                    if deadline > now then nextAttempt = math.min(nextAttempt, deadline) end
+                    redis.call('ZADD', KEYS[2], nextAttempt, id)
                     table.insert(result, request)
                 end
             end
             return result
             """, List.class);
+    private static final DefaultRedisScript<Long> RESCHEDULE = new DefaultRedisScript<>("""
+            local clock = redis.call('TIME')
+            local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+            for _, claim in ipairs(cjson.decode(ARGV[1])) do
+                local raw = redis.call('HGET', KEYS[1], 'd:' .. claim.requestId)
+                if raw and redis.call('ZSCORE', KEYS[2], claim.requestId) then
+                    local retry = cjson.decode(raw)
+                    if retry.token == claim.token then
+                        local initial = 1000
+                        local maximum = 30000
+                        local attempts
+                        if ARGV[2] == 'true' then
+                            retry.publications = retry.publications + 1
+                            retry.failures = 0
+                            attempts = retry.publications
+                            initial = tonumber(ARGV[3])
+                            maximum = 60000
+                        else
+                            retry.failures = retry.failures + 1
+                            attempts = retry.failures
+                        end
+                        local delay = math.min(maximum, initial * 2 ^ math.min(attempts - 1, 16))
+                        local random = tonumber(string.sub(redis.sha1hex(claim.token .. claim.requestId), 1, 6), 16) / 16777215
+                        delay = math.min(maximum, math.floor(delay * (0.8 + random * 0.4)))
+                        local request = cjson.decode(redis.call('HGET', KEYS[1], 'r:' .. claim.requestId))
+                        local nextAttempt = now + delay
+                        if request.queueDeadlineMs > now then
+                            nextAttempt = math.min(nextAttempt, request.queueDeadlineMs)
+                        elseif ARGV[2] == 'true' then
+                            nextAttempt = now
+                        end
+                        redis.call('ZADD', KEYS[2], nextAttempt, claim.requestId)
+                        retry.token = cjson.null
+                        redis.call('HSET', KEYS[1], 'd:' .. claim.requestId, cjson.encode(retry))
+                    end
+                end
+            end
+            return 1
+            """, Long.class);
     private static final DefaultRedisScript<List> HISTORY = new DefaultRedisScript<>("""
             local result = {}
             local ids = cjson.decode(redis.call('HGET', KEYS[1], 'history:' .. ARGV[1]) or '[]')
@@ -73,11 +122,14 @@ public class Preallocation {
     private final StringRedisTemplate redis;
     private final ObjectMapper json;
     private final TransactionTemplate transactions;
+    private final SaleProperties properties;
 
-    public Preallocation(SaleStore store, StringRedisTemplate redis, ObjectMapper json, PlatformTransactionManager manager) {
+    public Preallocation(SaleStore store, StringRedisTemplate redis, ObjectMapper json, PlatformTransactionManager manager,
+                         SaleProperties properties) {
         this.store = store;
         this.redis = redis;
         this.json = json;
+        this.properties = properties;
         this.transactions = new TransactionTemplate(manager);
         this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -115,11 +167,22 @@ public class Preallocation {
         return entries.stream().map(item -> json.readValue((String) item, Entry.class).view()).toList();
     }
 
-    public List<RequestMessage> claim(String tenant) {
-        List<?> entries = redis.execute(CLAIM, keys(tenant));
+    /** 领取申请并设置带令牌的租约，旧投递回调无法覆盖新的领取记录。 */
+    public List<Claim> claim(String tenant) {
+        String token = UUID.randomUUID().toString();
+        List<?> entries = redis.execute(CLAIM, keys(tenant), token, Long.toString(properties.requestClaimLeaseMs()));
         return entries.stream().map(item -> json.readValue((String) item, Entry.class).view())
-                .map(view -> new RequestMessage(tenant, view.requestId(), view)).toList();
+                .map(view -> new Claim(new RequestMessage(tenant, view.requestId(), view), token)).toList();
     }
+
+    /** 按发布确认结果安排带抖动的重试，业务期限到达时立即允许超时处理。 */
+    public void reschedule(List<Claim> claims, boolean published) {
+        var entries = claims.stream().map(claim -> Map.of("requestId", claim.request().requestId(), "token", claim.token())).toList();
+        redis.execute(RESCHEDULE, keys(claims.getFirst().request().tenantId()), json.writeValueAsString(entries),
+                Boolean.toString(published), Long.toString(properties.requestPublishWaitMs()));
+    }
+
+    public record Claim(RequestMessage request, String token) {}
 
     public long pendingCount(String tenant) {
         Long count = redis.opsForZSet().zCard(keys(tenant).get(1));
@@ -127,16 +190,48 @@ public class Preallocation {
     }
 
     public void synchronize(String tenant, ReservationView result) {
-        Long updated = redis.execute(SYNC, keys(tenant), json.writeValueAsString(Entry.from(result)));
+        synchronizeBatch(tenant, List.of(result));
+    }
+
+    /** 原子同步同租户的一批结果，旧的单条调用复用相同 Lua。 */
+    public void synchronizeBatch(String tenant, List<ReservationView> results) {
+        if (results.isEmpty()) { return; }
+        Object[] entries = results.stream().map(Entry::from).map(json::writeValueAsString).toArray();
+        Long updated = redis.execute(SYNC, keys(tenant), entries);
         if (!Long.valueOf(1).equals(updated)) {
             initialize(tenant);
-            updated = redis.execute(SYNC, keys(tenant), json.writeValueAsString(Entry.from(result)));
+            updated = redis.execute(SYNC, keys(tenant), entries);
             if (!Long.valueOf(1).equals(updated)) { throw new IllegalStateException("Redis admission state unavailable"); }
         }
     }
 
+    /** 批量核对已同步的版本，Redis 不可用时交由持久事件继续补偿。 */
+    public Set<String> synchronizedRequests(String tenant, List<ReservationView> results) {
+        var synchronizedIds = new HashSet<String>();
+        if (results.isEmpty()) { return synchronizedIds; }
+        try {
+            var entries = redis.opsForHash().multiGet(keys(tenant).getFirst(),
+                    results.stream().map(result -> (Object) ("r:" + result.requestId())).toList());
+            for (int index = 0; index < results.size(); index++) {
+                if (entries.get(index) == null) { continue; }
+                var previous = json.readValue((String) entries.get(index), Entry.class);
+                var result = results.get(index);
+                if (previous.persisted() && previous.view().equals(result)) { synchronizedIds.add(result.requestId()); }
+            }
+        } catch (DataAccessException error) {
+            log.debug("Redis synchronization check deferred", error);
+        }
+        return synchronizedIds;
+    }
+
+    /** 已同步版本通过批量读取跳过重复 Lua 写入。 */
+    public void synchronizeMissing(String tenant, List<ReservationView> results) {
+        var synchronizedIds = synchronizedRequests(tenant, results);
+        synchronizeBatch(tenant, results.stream().filter(result -> !synchronizedIds.contains(result.requestId())).toList());
+    }
+
     public void synchronizeQuietly(String tenant, ReservationView result) {
-        try { synchronize(tenant, result); }
+        try { synchronizeMissing(tenant, List.of(result)); }
         catch (DataAccessException error) { log.warn("Redis result synchronization deferred for {}", result.requestId()); }
     }
 

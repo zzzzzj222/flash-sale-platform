@@ -35,25 +35,36 @@ public class OutboxService {
                            int attempts, String lease) {}
 
     /**
-     * 在事务中领取最多 16 条到期可投递事件，包括租约已过期的处理中事件。
+     * 在事务中领取最多 64 条到期可投递事件，包括租约已过期的处理中事件。
      * 跳过其他事务已锁定的行，为本批事件设置 60 秒租约并递增尝试次数。
      *
      * @return 携带本次租约和更新后尝试次数的事件列表
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public List<Delivery> claim() {
+        return claim(List.of("RABBIT", "REDIS", "WEBHOOK"), 64);
+    }
+
+    /** 按投递目标隔离领取任务，同一批事件使用一个租约并一次更新领取状态。 */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public List<Delivery> claim(List<String> destinations, int limit) {
+        if (destinations.isEmpty() || limit < 1 || limit > 64) { throw new IllegalArgumentException("Invalid outbox batch"); }
         long now = store.now();
         String lease = UUID.randomUUID().toString();
         var events = store.jdbc().sql("""
-                SELECT * FROM outbox WHERE available_at_ms<=?
-                AND (status='READY' OR (status='IN_FLIGHT' AND locked_until_ms<=?))
-                ORDER BY available_at_ms,id LIMIT 16 FOR UPDATE SKIP LOCKED
-                """).params(now, now).query((row, index) -> new Delivery(row.getString("id"),
+                SELECT * FROM outbox WHERE destination IN (:destinations) AND available_at_ms<=:now
+                AND (status='READY' OR (status='IN_FLIGHT' AND locked_until_ms<=:now))
+                ORDER BY available_at_ms,id LIMIT :limit FOR UPDATE SKIP LOCKED
+                """).param("destinations", destinations).param("now", now).param("limit", limit)
+                .query((row, index) -> new Delivery(row.getString("id"),
                 row.getString("tenant_id"), row.getString("request_id"), row.getString("destination"),
                 row.getString("payload"), row.getInt("attempts") + 1, lease)).list();
-        for (var event : events) {
-            store.jdbc().sql("UPDATE outbox SET status='IN_FLIGHT',attempts=attempts+1,lease_owner=?,locked_until_ms=? WHERE id=?")
-                    .params(lease, now + 60000, event.id()).update();
+        if (!events.isEmpty()) {
+            store.jdbc().sql("""
+                    UPDATE outbox SET status='IN_FLIGHT',attempts=attempts+1,lease_owner=:lease,locked_until_ms=:until
+                    WHERE id IN (:ids)
+                    """).param("lease", lease).param("until", now + 60000)
+                    .param("ids", events.stream().map(Delivery::id).toList()).update();
         }
         return events;
     }
@@ -64,8 +75,20 @@ public class OutboxService {
      * @param event 本次已成功投递的事件
      */
     public void delivered(Delivery event) {
-        store.jdbc().sql("UPDATE outbox SET status='DELIVERED',last_error=NULL WHERE id=? AND lease_owner=? AND status='IN_FLIGHT'")
-                .params(event.id(), event.lease()).update();
+        delivered(List.of(event));
+    }
+
+    /** 只完成仍属于同一领取租约的事件，过期回调不能覆盖新投递者的结果。 */
+    public void delivered(List<Delivery> events) {
+        if (events.isEmpty()) { return; }
+        String lease = events.getFirst().lease();
+        if (events.stream().anyMatch(event -> !lease.equals(event.lease()))) {
+            throw new IllegalArgumentException("Outbox batch must share one lease");
+        }
+        store.jdbc().sql("""
+                UPDATE outbox SET status='DELIVERED',last_error=NULL
+                WHERE id IN (:ids) AND lease_owner=:lease AND status='IN_FLIGHT'
+                """).param("ids", events.stream().map(Delivery::id).toList()).param("lease", lease).update();
     }
 
     /**

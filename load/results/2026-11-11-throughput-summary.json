@@ -1,0 +1,957 @@
+{
+  "recorded_at": "2026-11-11T16:51:17.453004+08:00",
+  "source_commit": "bd9701c58173905345349ac9bda68063c3102d07",
+  "source_changes": "Uncommitted producer batching, fenced retry backoff, bulk SQL and isolated outbox synchronization",
+  "jar_sha256": "52f44691d9d9aa0eff1e38cb32be757e1514f8cc98f2a231c1189449ddcaad3d",
+  "source_sha256": "9672479946e9793c819e296a048bbac1e1826a8deacd3912bfea428d4ecdedc4",
+  "load_script_sha256": "858e867f77164820b5e1b080feb0e5af5cd53ba08eee7016e7c24d6c2c2bee7f",
+  "environment": {
+    "host": "Windows 11 Intel Core i9-11900H",
+    "logical_cpus": 16,
+    "host_ram_bytes": 34159550464,
+    "java": "Temurin 25.0.5",
+    "k6": "2.3.0",
+    "docker_engine": "29.8.2",
+    "mysql": "8.4.13",
+    "redis": "8.2.11",
+    "rabbitmq": "4.2.9",
+    "rabbitmq_image": "rabbitmq:4.2-management",
+    "redis_persistence": {
+      "appendonly": "yes",
+      "maxmemory-policy": "noeviction",
+      "appendfsync": "always"
+    },
+    "database_pool": 16,
+    "consumers_min": 2,
+    "consumers_max": 4,
+    "queue_timeout_seconds": 30,
+    "hold_seconds": 1800,
+    "rabbitmq_queue_limit": 10000,
+    "admission_user_per_second": 10000,
+    "raised_admission_global": 20000,
+    "raised_admission_client": 20000,
+    "default_admission_global": 500,
+    "default_admission_client": 200,
+    "jvm_options": [
+      "-Xms256m",
+      "-Xmx1g",
+      "-XX:MaxMetaspaceSize=256m"
+    ],
+    "project": "flashsale-throughput-20261111",
+    "base_url": "http://127.0.0.1:18082",
+    "webhook_enabled": false,
+    "generator_on_service_host": true,
+    "other_containers_running": [
+      "OpenSearch",
+      "Chroma"
+    ],
+    "memory_stop_mb": 1500,
+    "warmup_cases": 2,
+    "message_batch_size": 16,
+    "outbox_redis_batch_size": 64,
+    "outbox_redis_delay_ms": 50,
+    "publish_wait_initial_ms": 15000,
+    "publish_wait_max_ms": 60000,
+    "failure_retry_initial_ms": 1000,
+    "failure_retry_max_ms": 30000,
+    "retry_jitter": 0.2,
+    "request_claim_lease_ms": 30000,
+    "publication_workers": 16,
+    "pending_expiry_workers": 4,
+    "redis_sync_workers": 4,
+    "notification_workers": 4
+  },
+  "results": [
+    {
+      "label": "raised-75",
+      "activity_id": "1f1072d8-3e5e-482d-abbf-021867c87957",
+      "profile": "raised",
+      "target_rps": 75,
+      "duration_seconds": 60,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 62.48,
+      "drain_seconds": 4.88,
+      "drained": true,
+      "submissions": 4500,
+      "actual_submission_rps": 74.99988262518369,
+      "http_requests": 4500,
+      "actual_http_rps": 74.99988262518369,
+      "accepted": 4500,
+      "throttled": 0,
+      "immediate_queued": 4500,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 12.56766,
+      "accepted_avg_ms": 8.959076911111115,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 62,
+        "p95": 108,
+        "max": 119
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 995500,
+        "held": 4500,
+        "quota": 4500,
+        "max_per_user": 1,
+        "redis_available": 995500,
+        "redis_quota": 4500,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 4500,
+          "quantity": 4500,
+          "avg_ms": 62.0,
+          "max_ms": 119
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 9,
+      "min_free_mb": 8182,
+      "final": {
+        "time": 1794386848.1593335,
+        "free_mb": 8570,
+        "states": [
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 4500,
+            "quantity": 4500,
+            "avg_ms": 62.0,
+            "max_ms": 119
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 4500
+          }
+        ],
+        "database_count": 4500,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 4359464,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\throughput-2026-11-11\\raised-75.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "raised-100",
+      "activity_id": "337e7233-c13c-435c-9a82-2057c441dae0",
+      "profile": "raised",
+      "target_rps": 100,
+      "duration_seconds": 30,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 31.06,
+      "drain_seconds": 1.42,
+      "drained": true,
+      "submissions": 3000,
+      "actual_submission_rps": 99.99497758559247,
+      "http_requests": 3000,
+      "actual_http_rps": 99.99497758559247,
+      "accepted": 3000,
+      "throttled": 0,
+      "immediate_queued": 3000,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 10.903909999999996,
+      "accepted_avg_ms": 8.329099233333325,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 61,
+        "p95": 107,
+        "max": 117
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 997000,
+        "held": 3000,
+        "quota": 3000,
+        "max_per_user": 1,
+        "redis_available": 997000,
+        "redis_quota": 3000,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 3000,
+          "quantity": 3000,
+          "avg_ms": 61.0,
+          "max_ms": 117
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 12,
+      "min_free_mb": 8106,
+      "final": {
+        "time": 1794386880.9855614,
+        "free_mb": 8402,
+        "states": [
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 3000,
+            "quantity": 3000,
+            "avg_ms": 61.0,
+            "max_ms": 117
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 3000
+          }
+        ],
+        "database_count": 3000,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 6296640,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\throughput-2026-11-11\\raised-100.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "raised-200",
+      "activity_id": "984afc09-29cf-4f6a-90fe-4c1ed7f1f15c",
+      "profile": "raised",
+      "target_rps": 200,
+      "duration_seconds": 30,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 31.39,
+      "drain_seconds": 1.5,
+      "drained": true,
+      "submissions": 6001,
+      "actual_submission_rps": 199.94951916039005,
+      "http_requests": 6001,
+      "actual_http_rps": 199.94951916039005,
+      "accepted": 6001,
+      "throttled": 0,
+      "immediate_queued": 6001,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 16.2785,
+      "accepted_avg_ms": 11.532840459923309,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 69,
+        "p95": 116,
+        "max": 138
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 993999,
+        "held": 6001,
+        "quota": 6001,
+        "max_per_user": 1,
+        "redis_available": 993999,
+        "redis_quota": 6001,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 6001,
+          "quantity": 6001,
+          "avg_ms": 68.0,
+          "max_ms": 138
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 26,
+      "min_free_mb": 7727,
+      "final": {
+        "time": 1794386914.1120453,
+        "free_mb": 7816,
+        "states": [
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 6001,
+            "quantity": 6001,
+            "avg_ms": 68.0,
+            "max_ms": 138
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 6001
+          }
+        ],
+        "database_count": 6001,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 10370304,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\throughput-2026-11-11\\raised-200.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "raised-500",
+      "activity_id": "d909a8f3-fda1-4257-a329-aafcff5b40d7",
+      "profile": "raised",
+      "target_rps": 500,
+      "duration_seconds": 20,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 23.33,
+      "drain_seconds": 5.03,
+      "drained": true,
+      "submissions": 10001,
+      "actual_submission_rps": 499.7336910615741,
+      "http_requests": 10001,
+      "actual_http_rps": 499.7336910615741,
+      "accepted": 10001,
+      "throttled": 0,
+      "immediate_queued": 10001,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 21.662,
+      "accepted_avg_ms": 14.816862763723725,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 86,
+        "p95": 148,
+        "max": 203
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 989999,
+        "held": 10001,
+        "quota": 10001,
+        "max_per_user": 1,
+        "redis_available": 989999,
+        "redis_quota": 10001,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 10001,
+          "quantity": 10001,
+          "avg_ms": 88.0,
+          "max_ms": 203
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 59,
+      "min_free_mb": 7272,
+      "final": {
+        "time": 1794386942.8058944,
+        "free_mb": 7762,
+        "states": [
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 10001,
+            "quantity": 10001,
+            "avg_ms": 88.0,
+            "max_ms": 203
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 10001
+          }
+        ],
+        "database_count": 10001,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 16226584,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\throughput-2026-11-11\\raised-500.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "burst-2000",
+      "activity_id": "86180a5f-c2b8-4104-9b77-dc8fdeab35d9",
+      "profile": "raised",
+      "target_rps": 2000,
+      "duration_seconds": 5,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 9.46,
+      "drain_seconds": 15.64,
+      "drained": true,
+      "submissions": 10001,
+      "actual_submission_rps": 1994.4795136381636,
+      "http_requests": 10001,
+      "actual_http_rps": 1994.4795136381636,
+      "accepted": 10001,
+      "throttled": 0,
+      "immediate_queued": 10001,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 32.0703,
+      "accepted_avg_ms": 22.254239826017567,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 6007,
+        "p95": 11187,
+        "max": 11773
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 989999,
+        "held": 10001,
+        "quota": 10001,
+        "max_per_user": 1,
+        "redis_available": 989999,
+        "redis_quota": 10001,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 10001,
+          "quantity": 10001,
+          "avg_ms": 5993.0,
+          "max_ms": 11773
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 6982,
+      "min_free_mb": 7226,
+      "final": {
+        "time": 1794386968.2330508,
+        "free_mb": 7518,
+        "states": [
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 10001,
+            "quantity": 10001,
+            "avg_ms": 5993.0,
+            "max_ms": 11773
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 10001
+          }
+        ],
+        "database_count": 10001,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 22649960,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\throughput-2026-11-11\\burst-2000.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "scarce-100",
+      "activity_id": "d0152000-75bc-43fe-96b7-eb21054c148b",
+      "profile": "raised",
+      "target_rps": 100,
+      "duration_seconds": 10,
+      "stock": 100,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 13.37,
+      "drain_seconds": 1.47,
+      "drained": true,
+      "submissions": 1000,
+      "actual_submission_rps": 99.99886001299585,
+      "http_requests": 1000,
+      "actual_http_rps": 99.99886001299585,
+      "accepted": 1000,
+      "throttled": 0,
+      "immediate_queued": 100,
+      "immediate_rejected": 900,
+      "accepted_p95_ms": 14.23629999999999,
+      "accepted_avg_ms": 9.045680700000005,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 65,
+        "p95": 108,
+        "max": 123
+      },
+      "inventory": {
+        "total": 100,
+        "available": 0,
+        "held": 100,
+        "quota": 100,
+        "max_per_user": 1,
+        "redis_available": 0,
+        "redis_quota": 100,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "REJECTED",
+          "reason": "SOLD_OUT",
+          "count": 900,
+          "quantity": 900,
+          "avg_ms": 0.0,
+          "max_ms": 0
+        },
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 100,
+          "quantity": 100,
+          "avg_ms": 64.0,
+          "max_ms": 123
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 7,
+      "min_free_mb": 7168,
+      "final": {
+        "time": 1794386983.348327,
+        "free_mb": 7556,
+        "states": [
+          {
+            "state": "REJECTED",
+            "reason": "SOLD_OUT",
+            "count": 900,
+            "quantity": 900,
+            "avg_ms": 0.0,
+            "max_ms": 0
+          },
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 100,
+            "quantity": 100,
+            "avg_ms": 64.0,
+            "max_ms": 123
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 1000
+          }
+        ],
+        "database_count": 1000,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 23145648,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\throughput-2026-11-11\\scarce-100.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "same-user-limit",
+      "activity_id": "a97b1c75-f0f6-4301-82c1-fefb83ae3eed",
+      "profile": "raised",
+      "target_rps": 100,
+      "duration_seconds": 10,
+      "stock": 100,
+      "limit_per_user": 2,
+      "user_pool_size": 1,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 13.38,
+      "drain_seconds": 1.44,
+      "drained": true,
+      "submissions": 1000,
+      "actual_submission_rps": 99.99585117213486,
+      "http_requests": 1000,
+      "actual_http_rps": 99.99585117213486,
+      "accepted": 1000,
+      "throttled": 0,
+      "immediate_queued": 2,
+      "immediate_rejected": 998,
+      "accepted_p95_ms": 14.490244999999996,
+      "accepted_avg_ms": 9.068236099999995,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 63,
+        "p95": 64,
+        "max": 64
+      },
+      "inventory": {
+        "total": 100,
+        "available": 98,
+        "held": 2,
+        "quota": 2,
+        "max_per_user": 2,
+        "redis_available": 98,
+        "redis_quota": 2,
+        "redis_max_per_user": 2,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "REJECTED",
+          "reason": "LIMIT_EXCEEDED",
+          "count": 998,
+          "quantity": 998,
+          "avg_ms": 0.0,
+          "max_ms": 0
+        },
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 2,
+          "quantity": 2,
+          "avg_ms": 64.0,
+          "max_ms": 64
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 11,
+      "min_free_mb": 7226,
+      "final": {
+        "time": 1794386998.497146,
+        "free_mb": 7736,
+        "states": [
+          {
+            "state": "REJECTED",
+            "reason": "LIMIT_EXCEEDED",
+            "count": 998,
+            "quantity": 998,
+            "avg_ms": 0.0,
+            "max_ms": 0
+          },
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 2,
+            "quantity": 2,
+            "avg_ms": 64.0,
+            "max_ms": 64
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 1000
+          }
+        ],
+        "database_count": 1000,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 23599744,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\throughput-2026-11-11\\same-user-limit.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "mixed-75",
+      "activity_id": "f6cc07e1-3a9c-4ff5-b67a-2c6f6a0a4531",
+      "profile": "raised",
+      "target_rps": 75,
+      "duration_seconds": 30,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": true,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 31.29,
+      "drain_seconds": 4.88,
+      "drained": true,
+      "submissions": 2250,
+      "actual_submission_rps": 74.99796805505217,
+      "http_requests": 6750,
+      "actual_http_rps": 224.9939041651565,
+      "accepted": 2250,
+      "throttled": 0,
+      "immediate_queued": 2250,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 12.983114999999994,
+      "accepted_avg_ms": 8.667225777777785,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 62,
+        "p95": 108,
+        "max": 121
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 997750,
+        "held": 2250,
+        "quota": 2250,
+        "max_per_user": 1,
+        "redis_available": 997750,
+        "redis_quota": 2250,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 2250,
+          "quantity": 2250,
+          "avg_ms": 61.0,
+          "max_ms": 121
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 9,
+      "min_free_mb": 7347,
+      "final": {
+        "time": 1794387034.9908648,
+        "free_mb": 7635,
+        "states": [
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 2250,
+            "quantity": 2250,
+            "avg_ms": 61.0,
+            "max_ms": 121
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 2250
+          }
+        ],
+        "database_count": 2250,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 24964088,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\throughput-2026-11-11\\mixed-75.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "default-500",
+      "activity_id": "488e9d36-e787-4f9b-ad51-02a53a00720c",
+      "profile": "default",
+      "target_rps": 500,
+      "duration_seconds": 20,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 22.93,
+      "drain_seconds": 1.73,
+      "drained": true,
+      "submissions": 10001,
+      "actual_submission_rps": 499.9393534223006,
+      "http_requests": 10001,
+      "actual_http_rps": 499.9393534223006,
+      "accepted": 4000,
+      "throttled": 6001,
+      "immediate_queued": 4000,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 29.293199999999995,
+      "accepted_avg_ms": 15.377916325000028,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 88,
+        "p95": 155,
+        "max": 217
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 996000,
+        "held": 4000,
+        "quota": 4000,
+        "max_per_user": 1,
+        "redis_available": 996000,
+        "redis_quota": 4000,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 4000,
+          "quantity": 4000,
+          "avg_ms": 90.0,
+          "max_ms": 217
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 53,
+      "min_free_mb": 7659,
+      "final": {
+        "time": 1794387076.5010872,
+        "free_mb": 7941,
+        "states": [
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 4000,
+            "quantity": 4000,
+            "avg_ms": 90.0,
+            "max_ms": 217
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 4000
+          }
+        ],
+        "database_count": 4000,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 27368840,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\throughput-2026-11-11\\default-500.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    }
+  ],
+  "mysql_deadlocks_total": 0,
+  "rabbitmq_dead_letter_messages": 0,
+  "regression": {
+    "baseline": "Deadlock reproduced by concurrentPersistenceAndStateChangesDoNotUpgradeForeignKeyLocks",
+    "fixed": "9 unit tests and 28 integration tests passed"
+  },
+  "evidence": {
+    "raw_directory": ".runtime\\throughput-2026-11-11",
+    "baseline_regression_log": ".runtime/lock-fix-2026-11-11/baseline-regression.log",
+    "fixed_verify_log": ".runtime\\throughput-2026-11-11\\verify.log"
+  },
+  "source_hashes": {
+    "backend/src/main/java/com/flashsale/core/SaleService.java": "9672479946e9793c819e296a048bbac1e1826a8deacd3912bfea428d4ecdedc4",
+    "backend/src/main/java/com/flashsale/core/Preallocation.java": "b0336b6a81f089c68c67a203278e10999661d16d5a726f8d72d5112cbd065bf2",
+    "backend/src/main/java/com/flashsale/messaging/OutboxService.java": "c254df6ae7637915cc3dba8db0c8ae86cdda1443a96826485b0b3763cc565964",
+    "backend/src/main/java/com/flashsale/messaging/OutboxDispatcher.java": "1ee802260fa02f437f46141d2d17717825e6032909125d238456252811a4bcb6",
+    "backend/src/main/java/com/flashsale/messaging/RequestConsumer.java": "c0b9467760486309e66eceffbc22973e97150ead6d8a773905219e9caac38822",
+    "backend/src/main/java/com/flashsale/SaleProperties.java": "79707af16de00d844293a08306a8dd626e3b73086407ce3d5e439f2eaee7078e",
+    "backend/src/main/resources/redis/synchronize-reservation.lua": "615ed16a197afb05198442b82b5866ce0a7bbf2bf159277f5be8e5310993eb83",
+    "backend/src/main/resources/application.yml": "6720a2e5d58a8564ff245d6974dfdadc93db748b66c2ca9234f2f71be35ac57e",
+    "backend/src/main/resources/db/migration/V4__outbox_destination_dispatch.sql": "7efc9db7e5a879d4465fc912c7e1f52d99afdbb2dba6aba6cbfc43ae82068204"
+  }
+}

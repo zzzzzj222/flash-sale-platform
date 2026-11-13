@@ -1,0 +1,686 @@
+{
+  "recorded_at": "2026-11-11T15:53:12.432919+08:00",
+  "source_commit": "bd9701c58173905345349ac9bda68063c3102d07",
+  "source_changes": "Uncommitted SaleService activity-first lock ordering fix",
+  "jar_sha256": "0aaf21cd5746b3d876540dc5e60dacbcb5cc7ce44207651c71f84123301db084",
+  "source_sha256": "e63f61fb3b9a2b25c74bcaac64fac9ffcfe5068a59953e3f129a9e59b0ff682c",
+  "load_script_sha256": "858e867f77164820b5e1b080feb0e5af5cd53ba08eee7016e7c24d6c2c2bee7f",
+  "environment": {
+    "host": "Windows 11 Intel Core i9-11900H",
+    "logical_cpus": 16,
+    "host_ram_bytes": 34159550464,
+    "java": "Temurin 25.0.5",
+    "k6": "2.3.0",
+    "docker_engine": "29.8.2",
+    "mysql": "8.4.13",
+    "redis": "8.2.11",
+    "rabbitmq": "4.2.9",
+    "rabbitmq_image": "rabbitmq:4.2-management",
+    "redis_persistence": {
+      "appendonly": "yes",
+      "maxmemory-policy": "noeviction",
+      "appendfsync": "always"
+    },
+    "database_pool": 16,
+    "consumers_min": 2,
+    "consumers_max": 4,
+    "queue_timeout_seconds": 30,
+    "hold_seconds": 1800,
+    "rabbitmq_queue_limit": 10000,
+    "admission_user_per_second": 10000,
+    "raised_admission_global": 20000,
+    "raised_admission_client": 20000,
+    "default_admission_global": 500,
+    "default_admission_client": 200,
+    "jvm_options": [
+      "-Xms256m",
+      "-Xmx1g",
+      "-XX:MaxMetaspaceSize=256m"
+    ],
+    "project": "flashsale-lockfix-final-20261111",
+    "base_url": "http://127.0.0.1:18082",
+    "webhook_enabled": false,
+    "generator_on_service_host": true,
+    "other_containers_running": [
+      "OpenSearch",
+      "Chroma"
+    ],
+    "memory_stop_mb": 1500,
+    "warmup_cases": 2
+  },
+  "results": [
+    {
+      "label": "raised-75",
+      "activity_id": "90317fc4-9866-4ea0-919d-4bb728e0e2d6",
+      "profile": "raised",
+      "target_rps": 75,
+      "duration_seconds": 60,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 63.11,
+      "drain_seconds": 4.83,
+      "drained": true,
+      "submissions": 4500,
+      "actual_submission_rps": 74.99937825515427,
+      "http_requests": 4500,
+      "actual_http_rps": 74.99937825515427,
+      "accepted": 4500,
+      "throttled": 0,
+      "immediate_queued": 4500,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 15.834380000000008,
+      "accepted_avg_ms": 10.994190044444414,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 130,
+        "p95": 278,
+        "max": 473
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 995500,
+        "held": 4500,
+        "quota": 4500,
+        "max_per_user": 1,
+        "redis_available": 995500,
+        "redis_quota": 4500,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 4500,
+          "quantity": 4500,
+          "avg_ms": 144.0,
+          "max_ms": 473
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 31,
+      "min_free_mb": 8236,
+      "final": {
+        "time": 1794383026.715742,
+        "free_mb": 8684,
+        "states": [
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 4500,
+            "quantity": 4500,
+            "avg_ms": 144.0,
+            "max_ms": 473
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 4500
+          }
+        ],
+        "database_count": 4500,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 4278608,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\lock-fix-final-2026-11-11\\raised-75.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "raised-100",
+      "activity_id": "cf12bca5-9b58-423e-abbc-d32f9f235a12",
+      "profile": "raised",
+      "target_rps": 100,
+      "duration_seconds": 30,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 31.44,
+      "drain_seconds": 8.28,
+      "drained": true,
+      "submissions": 3001,
+      "actual_submission_rps": 100.00044518692026,
+      "http_requests": 3001,
+      "actual_http_rps": 100.00044518692026,
+      "accepted": 3001,
+      "throttled": 0,
+      "immediate_queued": 3001,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 17.0454,
+      "accepted_avg_ms": 11.124614428523829,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 2136,
+        "p95": 3603,
+        "max": 3795
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 996999,
+        "held": 3001,
+        "quota": 3001,
+        "max_per_user": 1,
+        "redis_available": 996999,
+        "redis_quota": 3001,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 3001,
+          "quantity": 3001,
+          "avg_ms": 2079.0,
+          "max_ms": 3795
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 329,
+      "min_free_mb": 8193,
+      "final": {
+        "time": 1794383066.7157667,
+        "free_mb": 8411,
+        "states": [
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 3001,
+            "quantity": 3001,
+            "avg_ms": 2079.0,
+            "max_ms": 3795
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 3001
+          }
+        ],
+        "database_count": 3001,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 6177048,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\lock-fix-final-2026-11-11\\raised-100.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "raised-200",
+      "activity_id": "412f026e-b8de-423b-ba2c-5a729cd11be2",
+      "profile": "raised",
+      "target_rps": 200,
+      "duration_seconds": 30,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 31.67,
+      "drain_seconds": 78.3,
+      "drained": true,
+      "submissions": 6001,
+      "actual_submission_rps": 199.93511987084958,
+      "http_requests": 6001,
+      "actual_http_rps": 199.93511987084958,
+      "accepted": 6001,
+      "throttled": 0,
+      "immediate_queued": 6001,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 21.277,
+      "accepted_avg_ms": 14.495991018163656,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 12039,
+        "p95": 28103,
+        "max": 29995
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 996507,
+        "held": 3493,
+        "quota": 3493,
+        "max_per_user": 1,
+        "redis_available": 996507,
+        "redis_quota": 3493,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 3493,
+          "quantity": 3493,
+          "avg_ms": 13675.0,
+          "max_ms": 29995
+        },
+        {
+          "state": "REJECTED",
+          "reason": "QUEUE_TIMEOUT",
+          "count": 2508,
+          "quantity": 2508,
+          "avg_ms": 39405.0,
+          "max_ms": 50432
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 3545,
+      "min_free_mb": 7992,
+      "final": {
+        "time": 1794383176.971603,
+        "free_mb": 8659,
+        "states": [
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 3493,
+            "quantity": 3493,
+            "avg_ms": 13675.0,
+            "max_ms": 29995
+          },
+          {
+            "state": "REJECTED",
+            "reason": "QUEUE_TIMEOUT",
+            "count": 2508,
+            "quantity": 2508,
+            "avg_ms": 39405.0,
+            "max_ms": 50432
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 6001
+          }
+        ],
+        "database_count": 6001,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 10022008,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\lock-fix-final-2026-11-11\\raised-200.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "raised-500",
+      "activity_id": "d25cb84f-9a1f-492d-bfa8-fd5540dd6e27",
+      "profile": "raised",
+      "target_rps": 500,
+      "duration_seconds": 20,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 22.82,
+      "drain_seconds": 131.36,
+      "drained": true,
+      "submissions": 10001,
+      "actual_submission_rps": 499.1759229918044,
+      "http_requests": 10001,
+      "actual_http_rps": 499.1759229918044,
+      "accepted": 10001,
+      "throttled": 0,
+      "immediate_queued": 10001,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 27.2507,
+      "accepted_avg_ms": 17.643064253574593,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 16557,
+        "p95": 28729,
+        "max": 29998
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 996853,
+        "held": 3147,
+        "quota": 3147,
+        "max_per_user": 1,
+        "redis_available": 996853,
+        "redis_quota": 3147,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "REJECTED",
+          "reason": "QUEUE_TIMEOUT",
+          "count": 6854,
+          "quantity": 6854,
+          "avg_ms": 60013.0,
+          "max_ms": 93372
+        },
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 3147,
+          "quantity": 3147,
+          "avg_ms": 15951.0,
+          "max_ms": 29998
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 8110,
+      "min_free_mb": 8054,
+      "final": {
+        "time": 1794383331.408525,
+        "free_mb": 8543,
+        "states": [
+          {
+            "state": "REJECTED",
+            "reason": "QUEUE_TIMEOUT",
+            "count": 6854,
+            "quantity": 6854,
+            "avg_ms": 60013.0,
+            "max_ms": 93372
+          },
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 3147,
+            "quantity": 3147,
+            "avg_ms": 15951.0,
+            "max_ms": 29998
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 10001
+          }
+        ],
+        "database_count": 10001,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 16154272,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\lock-fix-final-2026-11-11\\raised-500.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "burst-2000",
+      "activity_id": "7537bb23-dde4-4ebe-9b1f-64e9ad4dc27e",
+      "profile": "raised",
+      "target_rps": 2000,
+      "duration_seconds": 5,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 9.33,
+      "drain_seconds": 139.69,
+      "drained": true,
+      "submissions": 10001,
+      "actual_submission_rps": 1993.4980986122375,
+      "http_requests": 10001,
+      "actual_http_rps": 1993.4980986122375,
+      "accepted": 10001,
+      "throttled": 0,
+      "immediate_queued": 10001,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 37.4923,
+      "accepted_avg_ms": 24.978862673732706,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 15695,
+        "p95": 28639,
+        "max": 29989
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 997268,
+        "held": 2732,
+        "quota": 2732,
+        "max_per_user": 1,
+        "redis_available": 997268,
+        "redis_quota": 2732,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 2732,
+          "quantity": 2732,
+          "avg_ms": 15701.0,
+          "max_ms": 29989
+        },
+        {
+          "state": "REJECTED",
+          "reason": "QUEUE_TIMEOUT",
+          "count": 7269,
+          "quantity": 7269,
+          "avg_ms": 57963.0,
+          "max_ms": 92017
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 9684,
+      "min_free_mb": 8217,
+      "final": {
+        "time": 1794383480.623382,
+        "free_mb": 8914,
+        "states": [
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 2732,
+            "quantity": 2732,
+            "avg_ms": 15701.0,
+            "max_ms": 29989
+          },
+          {
+            "state": "REJECTED",
+            "reason": "QUEUE_TIMEOUT",
+            "count": 7269,
+            "quantity": 7269,
+            "avg_ms": 57963.0,
+            "max_ms": 92017
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 10001
+          }
+        ],
+        "database_count": 10001,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 22559680,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\lock-fix-final-2026-11-11\\burst-2000.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    },
+    {
+      "label": "default-500",
+      "activity_id": "49bb9051-1624-4ba5-84de-3489311de914",
+      "profile": "default",
+      "target_rps": 500,
+      "duration_seconds": 20,
+      "stock": 1000000,
+      "limit_per_user": 1,
+      "user_pool_size": 0,
+      "mixed_reads": false,
+      "preallocated_vus": 200,
+      "max_vus": 500,
+      "exit_code": 0,
+      "stop_reason": null,
+      "load_wall_seconds": 23.44,
+      "drain_seconds": 69.67,
+      "drained": true,
+      "submissions": 10001,
+      "actual_submission_rps": 499.8859424325531,
+      "http_requests": 10001,
+      "actual_http_rps": 499.8859424325531,
+      "accepted": 4000,
+      "throttled": 6001,
+      "immediate_queued": 4000,
+      "immediate_rejected": 0,
+      "accepted_p95_ms": 34.25599,
+      "accepted_avg_ms": 20.137292075000037,
+      "unexpected_rate": 0,
+      "database_records_beyond_202": 0,
+      "dropped_iterations": 0,
+      "reserved_processing_ms": {
+        "p50": 15168,
+        "p95": 28382,
+        "max": 29998
+      },
+      "inventory": {
+        "total": 1000000,
+        "available": 996866,
+        "held": 3134,
+        "quota": 3134,
+        "max_per_user": 1,
+        "redis_available": 996866,
+        "redis_quota": 3134,
+        "redis_max_per_user": 1,
+        "valid": true
+      },
+      "final_states": [
+        {
+          "state": "RESERVED",
+          "reason": null,
+          "count": 3134,
+          "quantity": 3134,
+          "avg_ms": 15363.0,
+          "max_ms": 29998
+        },
+        {
+          "state": "REJECTED",
+          "reason": "QUEUE_TIMEOUT",
+          "count": 866,
+          "quantity": 866,
+          "avg_ms": 33190.0,
+          "max_ms": 35934
+        }
+      ],
+      "final_pending": 0,
+      "peak_pending": 2607,
+      "min_free_mb": 8411,
+      "final": {
+        "time": 1794383591.47793,
+        "free_mb": 8809,
+        "states": [
+          {
+            "state": "RESERVED",
+            "reason": null,
+            "count": 3134,
+            "quantity": 3134,
+            "avg_ms": 15363.0,
+            "max_ms": 29998
+          },
+          {
+            "state": "REJECTED",
+            "reason": "QUEUE_TIMEOUT",
+            "count": 866,
+            "quantity": 866,
+            "avg_ms": 33190.0,
+            "max_ms": 35934
+          }
+        ],
+        "outbox": [
+          {
+            "destination": "REDIS",
+            "status": "DELIVERED",
+            "count": 4000
+          }
+        ],
+        "database_count": 4000,
+        "database_queued": 0,
+        "pending": 0,
+        "redis_used_bytes": 25005400,
+        "mq": {
+          "ready": 0,
+          "unacked": 0
+        }
+      },
+      "samples_file": ".runtime\\lock-fix-final-2026-11-11\\default-500.samples.jsonl",
+      "mysql_deadlocks_before": 0,
+      "mysql_deadlocks_after": 0,
+      "mysql_deadlocks_delta": 0
+    }
+  ],
+  "mysql_deadlocks_total": 0,
+  "rabbitmq_dead_letter_messages": 0,
+  "regression": {
+    "baseline": "Deadlock reproduced by concurrentPersistenceAndStateChangesDoNotUpgradeForeignKeyLocks",
+    "fixed": "9 unit tests and 22 integration tests passed"
+  },
+  "evidence": {
+    "raw_directory": ".runtime\\lock-fix-final-2026-11-11",
+    "baseline_regression_log": ".runtime/lock-fix-2026-11-11/baseline-regression.log",
+    "fixed_verify_log": ".runtime\\lock-fix-final-2026-11-11\\fixed-verify.log"
+  }
+}

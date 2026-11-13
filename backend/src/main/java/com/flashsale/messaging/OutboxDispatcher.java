@@ -11,7 +11,11 @@ import java.util.HexFormat;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.List;
+import java.util.LinkedHashMap;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import jakarta.annotation.PreDestroy;
@@ -44,8 +48,10 @@ public class OutboxDispatcher {
     private final RabbitTemplate rabbit;
     private final Preallocation preallocation;
     private final ObjectMapper json;
-    private final ExecutorService deliveries = Executors.newFixedThreadPool(16,
-            Thread.ofVirtual().name("outbox-", 0).factory());
+    private final ExecutorService publications = executor("publish-", 16, 128);
+    private final ExecutorService expirations = executor("pending-expiry-", 4, 32);
+    private final ExecutorService synchronizations = executor("redis-sync-", 4, 64);
+    private final ExecutorService deliveries = executor("notification-", 4, 16);
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2))
             .followRedirects(HttpClient.Redirect.NEVER).build();
 
@@ -70,49 +76,128 @@ public class OutboxDispatcher {
     }
 
     /**
-     * 定时领取各租户的 Redis 待处理申请及数据库 outbox 事件，并发投递后等待本批任务完成。
-     * 单个租户的 Redis 数据访问失败时记录日志，并继续处理其他租户和 outbox 事件。
+     * 领取 Redis 待处理申请，同活动按 sale.batch-size 组成生产端批次，过期处理交给独立有界线程池。
      */
     @Scheduled(fixedDelayString = "${sale.dispatch-delay-ms:100}")
     public void dispatch() {
-        var tasks = new ArrayList<CompletableFuture<Void>>();
         for (var client : properties.clients()) {
             try {
-                for (var request : preallocation.claim(client.id())) {
-                    tasks.add(CompletableFuture.runAsync(() -> deliverRequest(request), deliveries));
+                for (var batch : batches(preallocation.claim(client.id()))) {
+                    var active = routeExpired(batch);
+                    if (active.isEmpty()) { continue; }
+                    try { publications.execute(() -> deliverRequests(active)); }
+                    catch (RejectedExecutionException error) { defer(active); }
                 }
             } catch (DataAccessException error) {
                 log.warn("Redis pending requests unavailable for {}", client.id());
             }
         }
-        for (var event : outbox.claim()) {
-            tasks.add(CompletableFuture.runAsync(() -> deliver(event), deliveries));
+    }
+
+    /** Redis 补偿独立调度，每次领取最多 64 条，按租户批量核对和同步后完成领取租约。 */
+    @Scheduled(fixedDelayString = "${sale.redis-sync-delay-ms:50}")
+    public void dispatchRedis() {
+        var groups = new LinkedHashMap<String, List<OutboxService.Delivery>>();
+        for (var event : outbox.claim(List.of("REDIS"), 64)) {
+            groups.computeIfAbsent(event.tenant(), ignored -> new ArrayList<>()).add(event);
+        }
+        var tasks = new ArrayList<CompletableFuture<Void>>();
+        for (var events : groups.values()) {
+            tasks.add(CompletableFuture.runAsync(() -> deliverRedis(events), synchronizations));
         }
         CompletableFuture.allOf(tasks.toArray(CompletableFuture[]::new)).join();
     }
 
-    /**
-     * 将未超过排队截止时间的申请发布到 RabbitMQ，已到期的申请直接交由业务服务处理。
-     * 投递异常时保留后续重试机会，中断时恢复线程的中断标记。
-     *
-     * @param request 从 Redis 领取的待处理申请
-     */
-    private void deliverRequest(RequestMessage request) {
-        try {
-            if (request.reservation().queueDeadline().toEpochMilli() <= System.currentTimeMillis()) {
-                sales.process(request);
-            } else {
-                publish(request.requestId(), json.writeValueAsString(request));
+    /** 慢通知和旧 Rabbit 事件使用独立调度，保持原事件标识和失败退避。 */
+    @Scheduled(fixedDelayString = "${sale.notification-delay-ms:100}")
+    public void dispatchNotifications() {
+        var tasks = outbox.claim(List.of("RABBIT", "WEBHOOK"), 16).stream()
+                .map(event -> CompletableFuture.runAsync(() -> deliver(event), deliveries)).toList();
+        CompletableFuture.allOf(tasks.toArray(CompletableFuture[]::new)).join();
+    }
+
+    /** 同租户输入按活动分组，输出不超过 sale.batch-size 的批次，保留组内领取顺序。 */
+    private List<List<Preallocation.Claim>> batches(List<Preallocation.Claim> claims) {
+        int size = properties.batchSize();
+        var groups = new LinkedHashMap<String, List<Preallocation.Claim>>();
+        for (var claim : claims) {
+            groups.computeIfAbsent(claim.request().reservation().activityId(), ignored -> new ArrayList<>()).add(claim);
+        }
+        var batches = new ArrayList<List<Preallocation.Claim>>();
+        for (var group : groups.values()) {
+            for (int start = 0; start < group.size(); start += size) {
+                batches.add(List.copyOf(group.subList(start, Math.min(group.size(), start + size))));
             }
+        }
+        return batches;
+    }
+
+    /** 调度和实际发布前均检查业务期限，Broker 故障与发布队列阻塞不会拖住到期清理。 */
+    private List<Preallocation.Claim> routeExpired(List<Preallocation.Claim> claims) {
+        long now = System.currentTimeMillis();
+        var expired = claims.stream().filter(claim -> claim.request().reservation().queueDeadline().toEpochMilli() <= now).toList();
+        var active = claims.stream().filter(claim -> claim.request().reservation().queueDeadline().toEpochMilli() > now).toList();
+        if (!expired.isEmpty()) {
+            try { expirations.execute(() -> expireRequests(expired)); }
+            catch (RejectedExecutionException error) { defer(expired); }
+        }
+        return active;
+    }
+
+    /** 发布同活动小批次并等待确认，成功等待业务结果，失败按持久计数退避。 */
+    private void deliverRequests(List<Preallocation.Claim> claims) {
+        var active = routeExpired(claims);
+        if (active.isEmpty()) { return; }
+        try {
+            var requests = active.stream().map(Preallocation.Claim::request).toList();
+            String payload = json.writeValueAsString(requests.size() == 1 ? requests.getFirst() : requests);
+            publish(active.getFirst().token() + ":" + requests.getFirst().requestId(), payload);
+            preallocation.reschedule(active, true);
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
+            defer(active);
         } catch (Exception error) {
-            log.warn("Request {} delivery deferred: {}", request.requestId(), error.getClass().getSimpleName());
+            log.warn("Request batch delivery deferred: {}", error.getClass().getSimpleName());
+            defer(active);
         }
     }
 
+    /** 已到期申请在同活动小事务中落库并结束，技术故障继续保留 pending 等待退避恢复。 */
+    private void expireRequests(List<Preallocation.Claim> claims) {
+        try { sales.processBatch(claims.stream().map(Preallocation.Claim::request).toList()); }
+        catch (Exception error) {
+            log.warn("Pending expiry batch deferred: {}", error.getClass().getSimpleName());
+            defer(claims);
+        }
+    }
+
+    /** 仅持有当前令牌的投递者可以修改重试时间，Redis 故障时保留原租约恢复。 */
+    private void defer(List<Preallocation.Claim> claims) {
+        try { preallocation.reschedule(claims, false); }
+        catch (DataAccessException error) { log.warn("Request retry scheduling deferred"); }
+    }
+
+    /** 批量读取已同步版本，缺失版本用一次 Lua 补齐，SQL 完成标记仍校验领取租约。 */
+    private void deliverRedis(List<OutboxService.Delivery> events) {
+        try {
+            var results = events.stream().map(event -> json.readValue(event.payload(), ReservationView.class)).toList();
+            preallocation.synchronizeMissing(events.getFirst().tenant(), results);
+            outbox.delivered(events);
+        } catch (Exception error) {
+            log.warn("Redis result batch deferred: {}", error.getClass().getSimpleName());
+            for (var event : events) { outbox.failed(event, error.getClass().getSimpleName()); }
+        }
+    }
+
+    /** 固定工作线程和等待队列，容量耗尽时由调用方保留持久化任务并退避。 */
+    private static ExecutorService executor(String name, int workers, int capacity) {
+        return new ThreadPoolExecutor(workers, workers, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(capacity), Thread.ofVirtual().name(name, 0).factory(),
+                new ThreadPoolExecutor.AbortPolicy());
+    }
+
     /**
-     * 按目标将事件发送到 RabbitMQ、同步到 Redis 或调用 Webhook，并记录投递结果。
+     * 发送旧 Rabbit 事件或调用 Webhook，并记录投递结果。
      * 失败时登记重试或终止状态，中断时同时恢复线程的中断标记。
      *
      * @param event 已领取并携带租约的事件
@@ -120,9 +205,6 @@ public class OutboxDispatcher {
     private void deliver(OutboxService.Delivery event) {
         try {
             if (event.destination().equals("RABBIT")) { publish(event); }
-            else if (event.destination().equals("REDIS")) {
-                preallocation.synchronize(event.tenant(), json.readValue(event.payload(), ReservationView.class));
-            }
             else { webhook(event); }
             outbox.delivered(event);
         } catch (InterruptedException error) {
@@ -140,11 +222,14 @@ public class OutboxDispatcher {
      */
     @PreDestroy
     void stop() {
-        deliveries.shutdown();
+        var executors = List.of(publications, expirations, synchronizations, deliveries);
+        executors.forEach(ExecutorService::shutdown);
         try {
-            if (!deliveries.awaitTermination(5, TimeUnit.SECONDS)) { deliveries.shutdownNow(); }
+            for (var executor : executors) {
+                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) { executor.shutdownNow(); }
+            }
         } catch (InterruptedException error) {
-            deliveries.shutdownNow();
+            executors.forEach(ExecutorService::shutdownNow);
             Thread.currentThread().interrupt();
         }
     }

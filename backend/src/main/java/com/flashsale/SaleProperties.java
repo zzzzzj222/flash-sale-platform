@@ -13,7 +13,10 @@ import org.springframework.validation.annotation.Validated;
  * @param demoEnabled                是否启用演示模式
  * @param workersEnabled             是否启用后台异步 worker（队列写入、Webhook 通知等）
  * @param queueName                  排队使用的队列名称
- * @param queueLimit                 队列允许的最大等待人数
+ * @param queueLimit                 主队列最大消息条数，每条消息最多包含 16 个申请
+ * @param batchSize                  生产端每条消息打包的申请数，1 表示请求逐条投递
+ * @param requestPublishWaitMs       发布确认后首次等待结果的毫秒数
+ * @param requestClaimLeaseMs        待处理申请领取租约的毫秒数
  * @param admissionGlobalPerSecond   全局每秒准入请求数
  * @param admissionClientPerSecond   单个客户端每秒准入请求数
  * @param admissionUserPerSecond     单个用户每秒准入请求数
@@ -26,6 +29,9 @@ public record SaleProperties(
         boolean workersEnabled,
         @NotBlank String queueName,
         @Min(1) int queueLimit,
+        @Min(1) @Max(16) int batchSize,
+        @Min(1000) @Max(60000) long requestPublishWaitMs,
+        @Min(3000) @Max(300000) long requestClaimLeaseMs,
         @Min(1) int admissionGlobalPerSecond,
         @Min(1) int admissionClientPerSecond,
         @Min(1) int admissionUserPerSecond,

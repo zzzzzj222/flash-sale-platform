@@ -16,11 +16,14 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import javax.sql.DataSource;
 import com.flashsale.api.Contracts.*;
 import com.flashsale.core.SaleService;
 import com.flashsale.core.SaleStore;
 import com.flashsale.core.Preallocation;
 import com.flashsale.messaging.OutboxDispatcher;
+import com.flashsale.messaging.OutboxService;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
@@ -34,6 +37,8 @@ import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactor
 import com.github.dockerjava.api.model.ExposedPort;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -41,6 +46,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mysql.MySQLContainer;
 import tools.jackson.databind.ObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 @Testcontainers
@@ -153,11 +159,14 @@ class SaleFlowIT {
     @Value("${local.server.port}") int port;
     @Autowired ObjectMapper json;
     @Autowired SaleStore store;
+    @Autowired DataSource dataSource;
+    @Autowired PlatformTransactionManager transactionManager;
     @Autowired StringRedisTemplate redis;
     @Autowired LettuceConnectionFactory redisConnections;
     @Autowired SaleService sales;
     @Autowired Preallocation preallocation;
     @Autowired RabbitTemplate rabbit;
+    @Autowired OutboxService outbox;
     @Autowired SaleProperties properties;
     @Autowired RabbitListenerEndpointRegistry listeners;
     final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
@@ -260,6 +269,289 @@ class SaleFlowIT {
         assertThat(sales.activity("demo", activity.id()).availableStock()).isZero();
         assertThat(store.jdbc().sql("SELECT SUM(used_quantity) FROM user_quotas WHERE tenant_id='demo' AND activity_id=?")
                 .param(activity.id()).query(Integer.class).single()).isEqualTo(10);
+    }
+
+    /**
+     * 作用：用共享锁同时阻塞落库、重复消息、确认、取消和超时事务，验证统一加锁顺序且死锁计数不增加。
+     */
+    @Test
+    void concurrentPersistenceAndStateChangesDoNotUpgradeForeignKeyLocks() throws Exception {
+        listeners.stop();
+        try {
+            var activity = activity("partner", 40, 1, 120);
+            var held = new ArrayList<Reserve>();
+            for (int index = 0; index < 4; index++) {
+                var input = request(activity, "held-lock-" + index);
+                var pending = preallocation.submit("partner", input);
+                sales.process(new RequestMessage("partner", input.requestId().toString(), pending));
+                held.add(input);
+            }
+            store.jdbc().sql("UPDATE reservations SET expires_at_ms=? WHERE tenant_id='partner' AND request_id=?")
+                    .params(store.now() - 1, held.get(1).requestId().toString()).update();
+            var operations = new ArrayList<Runnable>();
+            var pendingRequests = new ArrayList<Reserve>();
+            for (int index = 0; index < 12; index++) {
+                var input = request(activity, "pending-lock-" + index);
+                var pending = preallocation.submit("partner", input);
+                var message = new RequestMessage("partner", input.requestId().toString(), pending);
+                pendingRequests.add(input);
+                operations.add(() -> sales.process(message));
+                operations.add(() -> sales.process(message));
+            }
+            operations.add(0, () -> sales.release("partner", held.get(0).requestId().toString()));
+            operations.add(0, () -> sales.expire("partner", held.get(1).requestId().toString()));
+            operations.add(0, () -> sales.confirm("partner", held.get(2).requestId().toString(), "paid-lock-order-2"));
+            operations.add(0, () -> sales.confirm("partner", held.get(3).requestId().toString(), "paid-lock-order"));
+            operations.add(0, () -> sales.process(new RequestMessage("partner", held.get(0).requestId().toString())));
+            operations.add(0, () -> sales.release("partner", pendingRequests.getFirst().requestId().toString()));
+            long deadlocks = mysqlRootScalar("SELECT count FROM information_schema.INNODB_METRICS WHERE name='lock_deadlocks'");
+            try (var executor = Executors.newFixedThreadPool(8)) {
+                List<? extends java.util.concurrent.Future<?>> futures;
+                try (var connection = dataSource.getConnection()) {
+                    connection.setAutoCommit(false);
+                    try (var statement = connection.prepareStatement("SELECT id FROM activities WHERE tenant_id='partner' AND id=? FOR SHARE")) {
+                        statement.setString(1, activity.id());
+                        try (var rows = statement.executeQuery()) { assertThat(rows.next()).isTrue(); }
+                        futures = operations.stream().map(executor::submit).toList();
+                        await().atMost(Duration.ofSeconds(15)).until(() -> mysqlRootScalar(
+                                "SELECT COUNT(*) FROM performance_schema.data_lock_waits") >= 4);
+                    } finally { connection.rollback(); }
+                }
+                for (var future : futures) { future.get(30, TimeUnit.SECONDS); }
+            }
+            assertThat(mysqlRootScalar("SELECT count FROM information_schema.INNODB_METRICS WHERE name='lock_deadlocks'"))
+                    .isEqualTo(deadlocks);
+            assertThat(store.reservation("partner", held.get(0).requestId().toString(), false).state()).isEqualTo("RELEASED");
+            assertThat(store.reservation("partner", held.get(1).requestId().toString(), false).state()).isEqualTo("EXPIRED");
+            assertThat(store.reservation("partner", held.get(2).requestId().toString(), false).state()).isEqualTo("CONFIRMED");
+            assertThat(store.reservation("partner", held.get(3).requestId().toString(), false).state()).isEqualTo("CONFIRMED");
+            assertThat(store.reservation("partner", pendingRequests.getFirst().requestId().toString(), false).state()).isEqualTo("RELEASED");
+            assertThat(store.jdbc().sql("SELECT COUNT(*) FROM reservations WHERE tenant_id='partner' AND activity_id=?")
+                    .param(activity.id()).query(Integer.class).single()).isEqualTo(16);
+            assertThat(store.activity("partner", activity.id(), false).availableStock()).isEqualTo(27);
+            assertThat(store.jdbc().sql("SELECT SUM(used_quantity) FROM user_quotas WHERE tenant_id='partner' AND activity_id=?")
+                    .param(activity.id()).query(Integer.class).single()).isEqualTo(13);
+            assertThat(redis.opsForHash().get("flashsale:preallocation:{partner}:state", "stock:" + activity.id())).isEqualTo("27");
+        } finally { listeners.start(); }
+    }
+
+    /**
+     * 作用：通过容器内管理员连接读取锁诊断标量，避免赋予应用账号额外监控权限。
+     */
+    long mysqlRootScalar(String sql) throws Exception {
+        return Long.parseLong(mysqlRootExecute(sql));
+    }
+
+    /** 作用：在隔离测试库内执行锁诊断或故障注入 SQL，管理员密码从容器环境读取。 */
+    String mysqlRootExecute(String sql) throws Exception {
+        var result = MYSQL.execInContainer("sh", "-c",
+                "MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" exec mysql -u root -D flashsale -N -B -e \"$1\"", "--", sql);
+        assertThat(result.getExitCode()).as(result.getStderr()).isZero();
+        return result.getStdout().trim();
+    }
+
+    /** 作用：同批超时、限购和售罄只拒绝对应申请，成功申请正常提交，重复批次不会再次扣减。 */
+    @Test
+    void producerBatchKeepsPerRequestBusinessResultsAndDeduplicates() {
+        listeners.stop();
+        try {
+            var activity = activity("partner", 3, 2, 120);
+            var first = new Reserve(UUID.randomUUID(), UUID.fromString(activity.id()), "batch-limited", 1);
+            var queued = preallocation.submit("partner", first);
+            var expired = new ReservationView(queued.requestId(), queued.activityId(), queued.userId(), queued.quantity(),
+                    queued.state(), queued.reason(), queued.orderId(), Instant.ofEpochMilli(store.now() - 1),
+                    queued.expiresAt(), queued.createdAt(), queued.updatedAt());
+            var limited = preallocation.submit("partner", new Reserve(UUID.randomUUID(), UUID.fromString(activity.id()), "batch-limited", 2));
+            var allowed = preallocation.submit("partner", new Reserve(UUID.randomUUID(), UUID.fromString(activity.id()), "batch-allowed", 2));
+            var soldOut = preallocation.submit("partner", request(activity, "batch-sold-out"));
+            var messages = List.of(expired, limited, allowed, soldOut).stream()
+                    .map(view -> new RequestMessage("partner", view.requestId(), view)).toList();
+            sales.processBatch(messages);
+            assertThat(store.reservation("partner", expired.requestId(), false).reason()).isEqualTo("QUEUE_TIMEOUT");
+            assertThat(store.reservation("partner", limited.requestId(), false).reason()).isEqualTo("LIMIT_EXCEEDED");
+            assertThat(store.reservation("partner", soldOut.requestId(), false).reason()).isEqualTo("SOLD_OUT");
+            assertThat(store.reservation("partner", allowed.requestId(), false).state()).isEqualTo("RESERVED");
+            sales.processBatch(messages);
+            var changed = new ReservationView(allowed.requestId(), allowed.activityId(), allowed.userId(), 1,
+                    "QUEUED", null, null, allowed.queueDeadline(), null, allowed.createdAt(), allowed.updatedAt());
+            assertThatThrownBy(() -> sales.processBatch(List.of(new RequestMessage("partner", changed.requestId(), changed))))
+                    .isInstanceOf(com.flashsale.api.ApiException.class);
+            assertThat(store.activity("partner", activity.id(), false).availableStock()).isEqualTo(1);
+            assertThat(store.jdbc().sql("SELECT SUM(used_quantity) FROM user_quotas WHERE tenant_id='partner' AND activity_id=?")
+                    .param(activity.id()).query(Integer.class).single()).isEqualTo(2);
+            assertThat(store.jdbc().sql("SELECT COUNT(*) FROM outbox WHERE tenant_id='partner' AND request_id IN (?,?,?,?)")
+                    .params(expired.requestId(), limited.requestId(), allowed.requestId(), soldOut.requestId()).query(Integer.class).single()).isEqualTo(4);
+            assertThat(redis.opsForHash().get("flashsale:preallocation:{partner}:state", "stock:" + activity.id())).isEqualTo("1");
+        } finally { listeners.start(); }
+    }
+
+    /** 作用：在批量事件插入时注入异常，验证库存、额度、申请和事件全部回滚，修复后重试整批成功。 */
+    @Test
+    void batchTechnicalFailureRollsBackEveryWriteAndCanBeRetried() throws Exception {
+        listeners.stop();
+        try {
+            var activity = activity("partner", 2, 1, 120);
+            var views = List.of(preallocation.submit("partner", request(activity, "batch-rollback-a")),
+                    preallocation.submit("partner", request(activity, "batch-rollback-b")));
+            var messages = views.stream().map(view -> new RequestMessage("partner", view.requestId(), view)).toList();
+            mysqlRootExecute("CREATE TRIGGER batch_outbox_failure BEFORE INSERT ON outbox FOR EACH ROW "
+                    + "SET NEW.payload=IF(NEW.request_id='" + views.get(1).requestId() + "',NULL,NEW.payload)");
+            try {
+                assertThatThrownBy(() -> sales.processBatch(messages)).isInstanceOf(org.springframework.dao.DataAccessException.class);
+                assertThat(store.activity("partner", activity.id(), false).availableStock()).isEqualTo(2);
+                assertThat(store.jdbc().sql("SELECT COUNT(*) FROM reservations WHERE tenant_id='partner' AND activity_id=?")
+                        .param(activity.id()).query(Integer.class).single()).isZero();
+                assertThat(store.jdbc().sql("SELECT COUNT(*) FROM user_quotas WHERE tenant_id='partner' AND activity_id=?")
+                        .param(activity.id()).query(Integer.class).single()).isZero();
+                assertThat(store.jdbc().sql("SELECT COUNT(*) FROM outbox WHERE tenant_id='partner' AND request_id IN (?,?)")
+                        .params(views.get(0).requestId(), views.get(1).requestId()).query(Integer.class).single()).isZero();
+                for (var view : views) {
+                    assertThat(redis.opsForZSet().score("flashsale:preallocation:{partner}:pending", view.requestId())).isNotNull();
+                }
+            } finally { mysqlRootExecute("DROP TRIGGER IF EXISTS batch_outbox_failure"); }
+            sales.processBatch(messages);
+            sales.processBatch(messages);
+            assertThat(store.activity("partner", activity.id(), false).availableStock()).isZero();
+            assertThat(store.jdbc().sql("SELECT SUM(used_quantity) FROM user_quotas WHERE tenant_id='partner' AND activity_id=?")
+                    .param(activity.id()).query(Integer.class).single()).isEqualTo(2);
+            for (var view : views) { assertThat(store.reservation("partner", view.requestId(), false).state()).isEqualTo("RESERVED"); }
+        } finally { listeners.start(); }
+    }
+
+    /** 作用：真实 RabbitMQ 消费兼容生产端 16 条数组批次及旧定位消息，重复消息保持库存守恒。 */
+    @Test
+    void brokerConsumesProducerBatchAndLegacyMessageWithoutDoubleDeduction() {
+        listeners.stop();
+        var activity = activity("partner", 16, 1, 120);
+        var messages = new ArrayList<RequestMessage>();
+        try {
+            for (int index = 0; index < 16; index++) {
+                var view = preallocation.submit("partner", request(activity, "broker-batch-" + index));
+                messages.add(new RequestMessage("partner", view.requestId(), view));
+            }
+            rabbit.convertAndSend("", properties.queueName(), json.writeValueAsString(messages));
+            rabbit.convertAndSend("", properties.queueName(), json.writeValueAsString(
+                    new RequestMessage("partner", messages.getFirst().requestId())));
+        } finally { listeners.start(); }
+        for (var message : messages) { assertThat(completed("partner", UUID.fromString(message.requestId())).state()).isEqualTo("RESERVED"); }
+        assertThat(store.activity("partner", activity.id(), false).availableStock()).isZero();
+        assertThat(store.jdbc().sql("SELECT SUM(used_quantity) FROM user_quotas WHERE tenant_id='partner' AND activity_id=?")
+                .param(activity.id()).query(Integer.class).single()).isEqualTo(16);
+    }
+
+    /** 作用：Redis 同步失败后业务批次仍已提交，持久化事件恢复同步且后续重复批次不重复扣减。 */
+    @Test
+    void committedBatchRecoversRedisSynchronizationAfterOutage() {
+        listeners.stop();
+        try {
+            var activity = activity("partner", 2, 1, 120);
+            var views = List.of(preallocation.submit("partner", request(activity, "sync-batch-a")),
+                    preallocation.submit("partner", request(activity, "sync-batch-b")));
+            var messages = views.stream().map(view -> new RequestMessage("partner", view.requestId(), view)).toList();
+            var docker = DockerClientFactory.instance().client();
+            docker.pauseContainerCmd(REDIS.getContainerId()).exec();
+            try {
+                sales.processBatch(messages);
+                assertThat(store.activity("partner", activity.id(), true).availableStock()).isZero();
+                for (var view : views) { assertThat(store.reservation("partner", view.requestId(), false).state()).isEqualTo("RESERVED"); }
+            } finally { docker.unpauseContainerCmd(REDIS.getContainerId()).exec(); }
+            await().atMost(Duration.ofSeconds(20)).until(() -> views.stream().allMatch(view ->
+                    preallocation.find("partner", view.requestId()).orElseThrow().state().equals("RESERVED")));
+            sales.processBatch(messages);
+            assertThat(redis.opsForHash().get("flashsale:preallocation:{partner}:state", "stock:" + activity.id())).isEqualTo("0");
+            for (var view : views) { assertThat(redis.opsForZSet().score("flashsale:preallocation:{partner}:pending", view.requestId())).isNull(); }
+        } finally { listeners.start(); }
+    }
+
+    /** 作用：验证失败退避、发布等待、期限截断、旧领取回调隔离和完成后不再恢复 pending。 */
+    @Test
+    void retryBackoffHonorsDeadlineAndFencesOldCallbacks() {
+        String tenant = "retry-fixture";
+        var activity = sales.create(tenant, new CreateActivity("retry", "重投回归", 5, 1, 120, 600,
+                Instant.now().minusSeconds(2), Instant.now().plusSeconds(900)));
+        var input = request(activity, "retry-user");
+        var view = preallocation.submit(tenant, input);
+        String stateKey = "flashsale:preallocation:{" + tenant + "}:state";
+        String pendingKey = "flashsale:preallocation:{" + tenant + "}:pending";
+        var first = preallocation.claim(tenant).getFirst();
+        assertThat(redis.opsForZSet().score(pendingKey, view.requestId()) - System.currentTimeMillis()).isBetween(29000.0, 30500.0);
+        preallocation.reschedule(List.of(first), false);
+        assertThat(redis.opsForZSet().score(pendingKey, view.requestId()) - System.currentTimeMillis()).isBetween(500.0, 1500.0);
+        redis.opsForZSet().add(pendingKey, view.requestId(), System.currentTimeMillis() - 1);
+        var second = preallocation.claim(tenant).getFirst();
+        Double lease = redis.opsForZSet().score(pendingKey, view.requestId());
+        preallocation.reschedule(List.of(first), true);
+        assertThat(redis.opsForZSet().score(pendingKey, view.requestId())).isEqualTo(lease);
+        preallocation.reschedule(List.of(second), false);
+        assertThat(redis.opsForZSet().score(pendingKey, view.requestId()) - System.currentTimeMillis()).isBetween(1300.0, 2700.0);
+        redis.opsForZSet().add(pendingKey, view.requestId(), System.currentTimeMillis() - 1);
+        var third = preallocation.claim(tenant).getFirst();
+        preallocation.reschedule(List.of(third), true);
+        assertThat(redis.opsForZSet().score(pendingKey, view.requestId()) - System.currentTimeMillis()).isBetween(11500.0, 18500.0);
+        var raw = (tools.jackson.databind.node.ObjectNode) json.readTree((String) redis.opsForHash().get(stateKey, "r:" + view.requestId()));
+        long deadline = System.currentTimeMillis() + 2000;
+        raw.put("queueDeadlineMs", deadline);
+        redis.opsForHash().put(stateKey, "r:" + view.requestId(), json.writeValueAsString(raw));
+        redis.opsForZSet().add(pendingKey, view.requestId(), System.currentTimeMillis() - 1);
+        var fourth = preallocation.claim(tenant).getFirst();
+        preallocation.reschedule(List.of(fourth), true);
+        assertThat(redis.opsForZSet().score(pendingKey, view.requestId())).isEqualTo((double) deadline);
+        raw.put("queueDeadlineMs", System.currentTimeMillis() - 1);
+        redis.opsForHash().put(stateKey, "r:" + view.requestId(), json.writeValueAsString(raw));
+        redis.opsForZSet().add(pendingKey, view.requestId(), System.currentTimeMillis() - 1);
+        var expired = preallocation.claim(tenant).getFirst();
+        preallocation.reschedule(List.of(expired), false);
+        assertThat(redis.opsForZSet().score(pendingKey, view.requestId()) - System.currentTimeMillis()).isBetween(500.0, 1500.0);
+        var result = new ReservationView(view.requestId(), view.activityId(), view.userId(), view.quantity(), "REJECTED", "QUEUE_TIMEOUT",
+                null, Instant.ofEpochMilli(deadline), null, view.createdAt(), Instant.ofEpochMilli(System.currentTimeMillis()));
+        preallocation.synchronize(tenant, result);
+        preallocation.reschedule(List.of(expired), true);
+        assertThat(redis.opsForZSet().score(pendingKey, view.requestId())).isNull();
+        assertThat(redis.opsForHash().get(stateKey, "d:" + view.requestId())).isNull();
+    }
+
+    /** 作用：批量完成标记和失败回调只接受当前租约，旧投递者不能修改重新领取的事件。 */
+    @Test
+    void outboxBatchCompletionCannotOverwriteNewLease() {
+        listeners.stop();
+        try {
+            var activity = activity("partner", 1, 1, 120);
+            var view = preallocation.submit("partner", request(activity, "outbox-lease"));
+            sales.process(new RequestMessage("partner", view.requestId(), view));
+            String eventId = store.jdbc().sql("SELECT id FROM outbox WHERE tenant_id='partner' AND request_id=? AND destination='REDIS'")
+                    .param(view.requestId()).query(String.class).single();
+            String current = UUID.randomUUID().toString();
+            store.jdbc().sql("UPDATE outbox SET status='IN_FLIGHT',lease_owner=?,locked_until_ms=? WHERE id=?")
+                    .params(current, store.now() + 60000, eventId).update();
+            var old = new OutboxService.Delivery(eventId, "partner", view.requestId(), "REDIS", "{}", 1, UUID.randomUUID().toString());
+            outbox.delivered(List.of(old));
+            outbox.failed(old, "old callback");
+            assertThat(store.jdbc().sql("SELECT status FROM outbox WHERE id=?").param(eventId).query(String.class).single()).isEqualTo("IN_FLIGHT");
+            outbox.delivered(List.of(new OutboxService.Delivery(eventId, "partner", view.requestId(), "REDIS", "{}", 2, current)));
+            assertThat(store.jdbc().sql("SELECT status FROM outbox WHERE id=?").param(eventId).query(String.class).single()).isEqualTo("DELIVERED");
+        } finally { listeners.start(); }
+    }
+
+    /**
+     * 作用：取消事务先读到申请缺失，消费者随后提交并同步终态时，仍能按当前读取消预占。
+     */
+    @Test
+    void cancellationSeesConsumerCommitDespiteEarlierSnapshot() {
+        listeners.stop();
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var activity = activity("partner", 1, 1, 120);
+            var input = request(activity, "snapshot-cancel");
+            var pending = preallocation.submit("partner", input);
+            new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                assertThat(store.find("partner", input.requestId().toString(), false)).isEmpty();
+                java.util.concurrent.CompletableFuture.runAsync(() -> sales.process(
+                        new RequestMessage("partner", input.requestId().toString(), pending)), executor).join();
+                assertThat(preallocation.find("partner", input.requestId().toString()).orElseThrow().state()).isEqualTo("RESERVED");
+                assertThat(sales.release("partner", input.requestId().toString()).state()).isEqualTo("RELEASED");
+            });
+            assertThat(store.activity("partner", activity.id(), false).availableStock()).isEqualTo(1);
+            assertThat(redis.opsForHash().get("flashsale:preallocation:{partner}:state", "stock:" + activity.id())).isEqualTo("1");
+        } finally { listeners.start(); }
     }
 
     /**

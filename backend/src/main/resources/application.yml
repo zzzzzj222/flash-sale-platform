@@ -52,8 +52,11 @@ sale:
   workers-enabled: ${WORKERS_ENABLED:true}
   queue-name: ${SALE_QUEUE:flashsale.requests.v1}
   queue-limit: ${QUEUE_LIMIT:10000}
-  admission-global-per-second: ${ADMISSION_GLOBAL:500}
-  admission-client-per-second: ${ADMISSION_CLIENT:200}
+  batch-size: ${BATCH_SIZE:16}
+  request-publish-wait-ms: ${REQUEST_PUBLISH_WAIT_MS:15000}
+  request-claim-lease-ms: ${REQUEST_CLAIM_LEASE_MS:30000}
+  admission-global-per-second: ${ADMISSION_GLOBAL:2000}
+  admission-client-per-second: ${ADMISSION_CLIENT:1000}
   admission-user-per-second: ${ADMISSION_USER:3}
   clients:
     - id: demo

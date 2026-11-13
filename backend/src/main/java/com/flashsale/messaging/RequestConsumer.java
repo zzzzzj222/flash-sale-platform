@@ -1,6 +1,7 @@
 package com.flashsale.messaging;
 
 import com.flashsale.api.Contracts.RequestMessage;
+import java.util.ArrayList;
 import com.flashsale.core.SaleService;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -26,14 +27,32 @@ public class RequestConsumer {
     }
 
     /**
-     * 监听请求队列，将消息体解析为申请消息并交由业务服务处理。
-     * 解析或业务处理异常向监听容器传播，由容器决定后续处理。
+     * 监听请求队列，兼容旧单条消息和生产端小批次，事务提交后由容器确认消息。
+     * 批次内的数据或不变式错误改为逐条重试，避免一条坏申请拖整批进死信。
+     * 解析或数据库异常向监听容器传播，由容器决定后续处理。
      *
      * @param message RabbitMQ 接收到的原始消息
      */
     @RabbitListener(queues = "${sale.queue-name}")
     public void receive(Message message) {
-        var request = json.readValue(message.getBody(), RequestMessage.class);
-        service.process(request);
+        var payload = json.readTree(message.getBody());
+        if (!payload.isArray()) {
+            service.process(json.treeToValue(payload, RequestMessage.class));
+            return;
+        }
+        if (payload.size() > SaleService.MAX_BATCH_SIZE) { throw new IllegalArgumentException("Reservation batch too large"); }
+        var requests = new ArrayList<RequestMessage>();
+        for (var item : payload) { requests.add(json.treeToValue(item, RequestMessage.class)); }
+        try {
+            service.processBatch(requests);
+        } catch (IllegalArgumentException | IllegalStateException batchError) {
+            // 逐条重试是幂等的；单条失败仍抛给容器，其余申请已经提交。
+            RuntimeException failure = null;
+            for (var request : requests) {
+                try { service.process(request); }
+                catch (RuntimeException error) { if (failure == null) { failure = error; } }
+            }
+            if (failure != null) { throw failure; }
+        }
     }
 }
